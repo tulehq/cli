@@ -125,10 +125,9 @@ var services = []*Service{
 		AWS:     "Lambda",
 		Image:   Registry + "/functions",
 		Version: "0.7.0",
-		Ports: []Port{
-			{Name: PortAPI, Default: functionsPort},
-			{Name: PortRuntime, Default: functionsRuntimeAPIPort},
-		},
+		// Only the Lambda API is published: the function containers reach
+		// the Runtime API on the stack network.
+		Ports:        []Port{{Name: PortAPI, Default: functionsPort}},
 		Volume:       "functionsdata",
 		EndpointVars: []string{"LAMBDA"},
 		DependsOn:    []string{Queues},
@@ -138,14 +137,8 @@ var services = []*Service{
 		wire: func(w Wiring) map[string]string {
 			env := serviceEnv(w)
 			setIfSelected(env, w, "TULE_Functions_QueuesEndpoint", Queues)
-			functionsRuntimeEnv(env, w.HostPorts.Of(Functions, PortRuntime))
+			functionsNetworkEnv(env, w.Network)
 			return env
-		},
-		publish: func(host map[string]int) []Publish {
-			return []Publish{
-				{Host: host[PortAPI], Container: functionsPort},
-				functionsRuntimePublish(host[PortRuntime]),
-			}
 		},
 	},
 	{
@@ -173,22 +166,16 @@ var services = []*Service{
 	},
 }
 
-// The functions Runtime API, as functions configures it today: function
-// containers sit on the default bridge network and call
-// host.docker.internal:<port>, so the Runtime API is published on the host
-// at the port it listens on, and that port must be the same on both sides.
-// Attaching function containers to the stack network instead changes only
-// these two functions and the runtime entry in the functions ports.
-const functionsRuntimeAPIPort = 9061
-
-func functionsRuntimeEnv(env map[string]string, hostPort int) {
-	if hostPort != functionsRuntimeAPIPort {
-		env["TULE_Functions_RuntimeAPIPort"] = strconv.Itoa(hostPort)
-	}
-}
-
-func functionsRuntimePublish(hostPort int) Publish {
-	return Publish{Host: hostPort, Container: hostPort}
+// functionsNetworkEnv attaches the function containers to the stack
+// network, where they reach the Runtime API at functions:9061, its default
+// port, and the other services by their names. functions refuses a
+// RuntimeAPIHost other than host.docker.internal without a RuntimeAPIBind;
+// the image sets 0.0.0.0, and it is set here too so the stack does not lean
+// on the image's default.
+func functionsNetworkEnv(env map[string]string, network string) {
+	env["TULE_Functions_ContainerNetwork"] = network
+	env["TULE_Functions_RuntimeAPIHost"] = Functions
+	env["TULE_Functions_RuntimeAPIBind"] = "0.0.0.0"
 }
 
 // rootKeyEnv is the root key every service but the console is configured

@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"tule.dev/cli/internal/render"
 )
@@ -71,6 +72,17 @@ func (c *Compose) Up(ctx context.Context, p *render.Project) error {
 	return c.compose(ctx, p, "up", "--detach", "--wait", "--remove-orphans")
 }
 
+// UpServices runs `compose up -d --wait --no-deps` for services.
+func (c *Compose) UpServices(ctx context.Context, p *render.Project, services []string) error {
+	return c.compose(ctx, p, append(
+		[]string{"up", "--detach", "--wait", "--no-deps"}, services...)...)
+}
+
+// RemoveServices runs `compose rm --stop --force` for services.
+func (c *Compose) RemoveServices(ctx context.Context, p *render.Project, services []string) error {
+	return c.compose(ctx, p, append([]string{"rm", "--stop", "--force"}, services...)...)
+}
+
 // Down runs `compose down --remove-orphans`, with --volumes when asked.
 func (c *Compose) Down(ctx context.Context, p *render.Project, opts DownOptions) error {
 	args := []string{"down", "--remove-orphans"}
@@ -82,7 +94,7 @@ func (c *Compose) Down(ctx context.Context, p *render.Project, opts DownOptions)
 
 // Logs runs `compose logs`.
 func (c *Compose) Logs(ctx context.Context, p *render.Project, opts LogsOptions) error {
-	return c.compose(ctx, p, logsArgs(opts)...)
+	return c.composeTo(ctx, p, opts.Out, logsArgs(opts)...)
 }
 
 func logsArgs(opts LogsOptions) []string {
@@ -109,7 +121,25 @@ func composeArgs(p *render.Project, envFile string, verb ...string) []string {
 	}, verb...)
 }
 
-func (c *Compose) compose(ctx context.Context, p *render.Project, verb ...string) (err error) {
+// interruptGrace is how long compose has to exit once tule is interrupted,
+// before it is killed.
+const interruptGrace = time.Minute
+
+// compose runs a compose verb on p, its output to c.Out.
+func (c *Compose) compose(ctx context.Context, p *render.Project, verb ...string) error {
+	return c.composeTo(ctx, p, c.Out, verb...)
+}
+
+// composeTo runs a compose verb on p, its standard output to stdout and its
+// standard error to c.Out. When ctx is done, compose is interrupted rather
+// than killed, so it exits as it does on Ctrl-C, and the env file is
+// removed after it.
+func (c *Compose) composeTo(
+	ctx context.Context,
+	p *render.Project,
+	stdout io.Writer,
+	verb ...string,
+) (err error) {
 	data, err := p.YAML()
 	if err != nil {
 		return err //nolint:wrapcheck // Already says what it failed to do.
@@ -121,8 +151,10 @@ func (c *Compose) compose(ctx context.Context, p *render.Project, verb ...string
 	defer func() { err = errors.Join(err, cleanup()) }()
 	//nolint:gosec // The arguments are tule's own; the stack name is validated.
 	cmd := exec.CommandContext(ctx, dockerBinary, composeArgs(p, envFile, verb...)...)
+	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
+	cmd.WaitDelay = interruptGrace
 	cmd.Stdin = bytes.NewReader(data)
-	cmd.Stdout = c.Out
+	cmd.Stdout = stdout
 	cmd.Stderr = c.Out
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("docker compose %s: %w", verb[0], err)
@@ -227,6 +259,9 @@ func (c *Compose) PS(ctx context.Context, stack string) ([]Container, error) {
 
 // containerJSON is the part of `docker container inspect` PS reads.
 type containerJSON struct {
+	HostConfig struct {
+		GroupAdd []string `json:"GroupAdd"`
+	} `json:"HostConfig"`
 	Config struct {
 		Labels map[string]string `json:"Labels"`
 		Image  string            `json:"Image"`
@@ -265,12 +300,13 @@ func parseContainers(data []byte) ([]Container, []string, error) {
 	images := make([]string, 0, len(raw))
 	for _, r := range raw {
 		ct := Container{
-			ID:     r.ID,
-			Name:   strings.TrimPrefix(r.Name, "/"),
-			Image:  r.Config.Image,
-			Labels: r.Config.Labels,
-			Env:    envMap(r.Config.Env),
-			State:  r.State.Status,
+			ID:       r.ID,
+			Name:     strings.TrimPrefix(r.Name, "/"),
+			Image:    r.Config.Image,
+			Labels:   r.Config.Labels,
+			Env:      envMap(r.Config.Env),
+			State:    r.State.Status,
+			GroupAdd: r.HostConfig.GroupAdd,
 		}
 		if r.State.Health != nil {
 			ct.Health = r.State.Health.Status
@@ -397,18 +433,13 @@ func (c *Compose) RemoveVolumes(ctx context.Context, names []string) error {
 	return nil
 }
 
-// NetworkName is the network compose makes for a stack.
-func NetworkName(stack string) string {
-	return stack + "_default"
-}
-
 // RemoveFunctionContainers removes the containers labeled as functions'
 // on the stack's network. Function containers of other stacks, on their own
 // networks, are left alone.
 func (c *Compose) RemoveFunctionContainers(ctx context.Context, stack string) (int, error) {
 	ids, err := c.ids(ctx, "ps", "--all", "--quiet", "--no-trunc",
 		"--filter", "label="+LabelFunctionsInstance,
-		"--filter", "network="+NetworkName(stack))
+		"--filter", "network="+render.NetworkName(stack))
 	if err != nil {
 		return 0, fmt.Errorf("list function containers: %w", err)
 	}
@@ -421,4 +452,21 @@ func (c *Compose) RemoveFunctionContainers(ctx context.Context, stack string) (i
 		return 0, fmt.Errorf("remove function containers: %w", err)
 	}
 	return len(ids), nil
+}
+
+// SocketGroup runs stat in a throwaway container from image, with the
+// daemon's socket at socketPath mounted, and returns the group ID that owns
+// it. The mount is made by the daemon, so the answer is the socket's group
+// on the daemon's host: inside Docker Desktop's VM, or on a remote host.
+func (c *Compose) SocketGroup(ctx context.Context, image, socketPath string) (string, error) {
+	out, err := c.output(ctx, "run", "--rm", "--entrypoint", "stat",
+		"--volume", socketPath+":/s", image, "-c", "%g", "/s")
+	if err != nil {
+		return "", fmt.Errorf("find the Docker socket's group: %w", err)
+	}
+	gid := strings.TrimSpace(string(out))
+	if err := render.ValidateGroupID(gid); err != nil {
+		return "", fmt.Errorf("find the Docker socket's group: %w", err)
+	}
+	return gid, nil
 }

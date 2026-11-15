@@ -10,12 +10,13 @@ services:
       TULE_Auth_IdentityEndpoint: http://identity:9030
       TULE_Auth_SecretAccessKey: own+secret/key=
       TULE_Example: pa$$$$word
+      TULE_Functions_ContainerNetwork: second_default
       TULE_Functions_PullImages: "true"
       TULE_Functions_QueuesEndpoint: http://queues:9050
-      TULE_Functions_RuntimeAPIPort: "9161"
+      TULE_Functions_RuntimeAPIBind: 0.0.0.0
+      TULE_Functions_RuntimeAPIHost: functions
     ports:
       - 0.0.0.0:9160:9060
-      - 0.0.0.0:9161:9161
     volumes:
       - functionsdata:/data
       - /var/run/docker.sock:/var/run/docker.sock

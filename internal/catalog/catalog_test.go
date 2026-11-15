@@ -37,8 +37,17 @@ func wiring(t *testing.T, names ...string) Wiring {
 		Selection:  mustSelect(t, names...),
 		HostPorts:  defaultHostPorts(),
 		PublicHost: "localhost",
+		Network:    "tule_default",
 		RootKey:    testKey,
 	}
+}
+
+// functionsNetwork is the environment that puts functions' containers on
+// the stack network of wiring().
+var functionsNetwork = map[string]string{
+	"TULE_Functions_ContainerNetwork": "tule_default",
+	"TULE_Functions_RuntimeAPIHost":   "functions",
+	"TULE_Functions_RuntimeAPIBind":   "0.0.0.0",
 }
 
 func env(t *testing.T, w Wiring, name string) map[string]string {
@@ -138,16 +147,16 @@ var envCases = []struct {
 		name:      "functions without queues has no queues endpoint",
 		service:   Functions,
 		selection: []string{Functions},
-		want:      withKey(nil),
+		want:      withKey(functionsNetwork),
 	},
 	{
 		name:      "functions with queues and identity",
 		service:   Functions,
 		selection: []string{Functions, Queues, Identity},
-		want: withKey(map[string]string{
+		want: withKey(merge(functionsNetwork, map[string]string{
 			"TULE_Auth_IdentityEndpoint":    "http://identity:9030",
 			"TULE_Functions_QueuesEndpoint": "http://queues:9050",
-		}),
+		})),
 	},
 	{
 		name:      "console gets only the selected services and no key",
@@ -184,29 +193,27 @@ func TestQueuesBaseURLUsesPublicHostAndHostPort(t *testing.T) {
 	}
 }
 
-func TestFunctionsRuntimePort(t *testing.T) {
+func merge(a, b map[string]string) map[string]string {
+	out := maps.Clone(a)
+	maps.Copy(out, b)
+	return out
+}
+
+// TestFunctionsPublishesOnlyItsAPI holds functions to publishing the Lambda
+// API alone: its containers reach the Runtime API on the stack network.
+func TestFunctionsPublishesOnlyItsAPI(t *testing.T) {
 	svc, err := Lookup(Functions)
 	if err != nil {
 		t.Fatal(err)
 	}
 	w := wiring(t, Functions)
-	if _, ok := svc.Env(w)["TULE_Functions_RuntimeAPIPort"]; ok {
-		t.Error("TULE_Functions_RuntimeAPIPort is set at the default port")
-	}
+	w.HostPorts[Functions][PortAPI] = 9160
 	got := svc.Publishes(w.HostPorts[Functions])
-	want := []Publish{{Host: 9060, Container: 9060}, {Host: 9061, Container: 9061}}
-	if !slices.Equal(got, want) {
+	if want := []Publish{{Host: 9160, Container: 9060}}; !slices.Equal(got, want) {
 		t.Errorf("Publishes() = %v, want %v", got, want)
 	}
-
-	w.HostPorts[Functions] = map[string]int{PortAPI: 9160, PortRuntime: 9161}
-	if got := svc.Env(w)["TULE_Functions_RuntimeAPIPort"]; got != "9161" {
-		t.Errorf("TULE_Functions_RuntimeAPIPort = %q, want 9161", got)
-	}
-	got = svc.Publishes(w.HostPorts[Functions])
-	want = []Publish{{Host: 9160, Container: 9060}, {Host: 9161, Container: 9161}}
-	if !slices.Equal(got, want) {
-		t.Errorf("Publishes() = %v, want %v", got, want)
+	if _, ok := svc.Env(w)["TULE_Functions_RuntimeAPIPort"]; ok {
+		t.Error("TULE_Functions_RuntimeAPIPort is set; the Runtime API stays on its default port")
 	}
 }
 

@@ -32,16 +32,12 @@ const (
 	ExampleSecretAccessKey = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 )
 
-// Port names. Every service has an API port; functions also has the port its
-// function containers reach the Runtime API at.
-const (
-	PortAPI     = "api"
-	PortRuntime = "runtime"
-)
+// PortAPI names a service's API port, the one port every service publishes.
+const PortAPI = "api"
 
 // Port is one port a service listens on.
 type Port struct {
-	// Name is PortAPI or PortRuntime.
+	// Name is PortAPI.
 	Name string
 	// Default is the container port, and the host port before any offset.
 	Default int
@@ -74,13 +70,15 @@ type Wiring struct {
 	RootKey   RootKey
 	// PublicHost is the host clients on this machine reach the services at.
 	PublicHost string
-	Selection  Selection
+	// Network is the Docker network the stack's containers are on, as
+	// Docker names it.
+	Network   string
+	Selection Selection
 }
 
 // Service is one catalog entry.
 type Service struct {
-	wire    func(w Wiring) map[string]string
-	publish func(host map[string]int) []Publish
+	wire func(w Wiring) map[string]string
 
 	// Name is the service's name, its compose service name and its host
 	// name on the stack network.
@@ -129,9 +127,6 @@ func (s *Service) Env(w Wiring) map[string]string {
 
 // Publishes returns the ports to publish given the service's host ports.
 func (s *Service) Publishes(host map[string]int) []Publish {
-	if s.publish != nil {
-		return s.publish(host)
-	}
 	out := make([]Publish, 0, len(s.Ports))
 	for _, p := range s.Ports {
 		out = append(out, Publish{Host: host[p.Name], Container: p.Default})

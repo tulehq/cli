@@ -22,16 +22,19 @@ Then `tule version` prints the version you installed.
 
 `tule` runs a stack with `docker compose`, so it needs the Docker Compose
 v2 plugin, which Docker Desktop includes and Linux installs as the
-`docker-compose-plugin` package. `logs`, `restart` and `reset` come next.
+`docker-compose-plugin` package.
 
 | Command | Does |
 |---|---|
-| `tule up [service...]` | Starts the stack and waits until its services are healthy. A new stack runs the services named, or the configured ones, or the default set; on a running stack, the services named are added. Lists the services recreated because their wiring or version changes before acting |
-| `tule down [service...] [--volumes]` | With services named, removes them from the stack, and recreates the services wired to them without their endpoints. With none, removes the whole stack. `--volumes` also deletes the data |
+| `tule up [service...] [--allow-downgrade] [--docker-gid <gid>] [--skip-port-check]` | Starts the stack and waits until its services are healthy. A new stack runs the services named, or the configured ones, or the default set; on a running stack, the services named are added. Lists the services recreated because their wiring or version changes before acting, and refuses to take a running service down a version without `--allow-downgrade` |
+| `tule down [service...] [--volumes] [--skip-port-check]` | With services named, removes them from the stack, and recreates the services wired to them without their endpoints. With none, removes the whole stack. `--volumes` also deletes the data |
 | `tule status [--json]` | Shows each service's state, health, version, host address and volume. Exits non-zero when a service is not running and healthy |
+| `tule logs [service...] [-f] [--since <time>]` | Prints the logs of the services named, or of the whole stack. `-f` keeps printing; `--since` takes a timestamp or a duration such as `10m` |
+| `tule restart [service...]` | Restarts the containers of the services named, or of the whole stack, keeping their data, and waits until they are healthy again |
+| `tule reset <service...> [--yes]` | Deletes the data of the services named: removes their containers and volumes and starts them again with empty ones. Asks first |
 | `tule services` | Lists the catalog: each service, the AWS service it stands in for, its image and tested version, its default ports |
 | `tule compose [service...] [-o file]` | Writes the compose file for the services named, or the configured ones, or the default set: every service but functions |
-| `tule env [--shell sh\|fish\|powershell]` | Prints the credentials, region and endpoint variables that point AWS SDKs and the AWS CLI at the configured services |
+| `tule env [--shell sh\|fish\|powershell]` | Prints the credentials, region and endpoint variables that point AWS SDKs and the AWS CLI at the running stack, or at the configured services when none runs |
 | `tule version` | Prints the version |
 
 Every command takes `--stack <name>` (default `tule`), the compose project
@@ -45,6 +48,7 @@ tule up object-store queues # only these
 eval "$(tule env)"
 tule status
 tule up identity            # adds identity, and rewires the others to it
+tule up functions           # adds functions; see "functions" below
 tule down queues            # removes queues, and its endpoint from the others
 tule down                   # removes the stack; its data stays in its volumes
 tule up                     # on a new stack: the default set, every service but functions
@@ -58,7 +62,9 @@ wiring or host ports change (by variable name; values are not printed), and
 the services it starts or removes. It also checks every host port it
 publishes is free, and names the service and the `ports:` or `portOffset:`
 key to change when one is not. The check listens on this machine, so it
-cannot see ports on a remote Docker host; there, pass `--skip-port-check`.
+cannot see ports on a remote Docker host; there, pass `--skip-port-check`
+to `up`, and to `down` with services named, which checks the ports of the
+services it recreates.
 
 Compose does not read a `.env` file in the directory `tule` runs from:
 `tule` gives it an empty env file instead, so the stack is the rendered
@@ -67,25 +73,59 @@ file and nothing else.
 Nothing is kept on disk. The stack's services are the catalog services
 that have containers in its compose project, running or stopped, and each
 container carries the absolute path of the `tule.yaml` it was started from
-as the label `dev.tule.config` (empty for none). So `status`, and `down`
-of the whole stack, work from any directory. `up`, and `down` with
-services named, re-render the stack from its configuration, and refuse
-when the running stack was started from another `tule.yaml`, naming both.
+as the label `dev.tule.config` (empty for none). So `status`, `logs`,
+`restart`, `env`, and `down` of the whole stack, work from any directory.
+`up`, `reset`, and `down` with services named, re-render the stack from
+its configuration, and refuse when the running stack was started from
+another `tule.yaml`, naming both.
 On a running stack, a bare `up` keeps the stack's services and warns when
 `services:` in `tule.yaml` names others: add services with `tule up
 <service...>`, and remove them with `tule down <service...>`.
 
 Volumes carry no tule labels, so a volume compose created from console's
-compose.yaml, under the same project name, is used as it is. Version
-changes are listed, not checked: a downgrade, which can serve stale data,
-is not refused yet, and after a `down` without `--volumes` the next `up`
-does not know which version wrote the kept data. `down --volumes` deletes the volumes of
-the catalog services only, not other volumes in the compose project.
+compose.yaml, under the same project name, is used as it is. `up` lists
+each version change before it recreates a service, and refuses to take a
+running service down a version, since a service may not read back right
+the data a newer version wrote (object-store documents that a downgrade
+serves stale data); `--allow-downgrade` goes ahead. A version that is not
+a release version, such as `latest`, counts as a downgrade. The check
+compares with the running containers' image tags, so after a `down`
+without `--volumes` the next `up` does not know which version wrote the
+kept data, and does not guard it. `down` with services named refuses a
+downgrade of the services it recreates in the same way; apply it with
+`tule up --allow-downgrade` first. `down --volumes` deletes the volumes
+of the catalog services only, not other volumes in the compose project.
 
-`tule up` does not run functions yet; write its compose file with `tule
-compose` and run it with `docker compose`. `tule down` also removes the
-function containers functions left on the stack's network
-(`dev.tule.functions.instance`).
+`tule down` also removes the function containers functions left on the
+stack's network (`dev.tule.functions.instance`), as does `tule down
+functions`.
+
+### tule logs, restart and reset
+
+```sh
+tule logs                  # every service of the stack
+tule logs queues -f        # follows queues' logs
+tule logs --since 10m      # the last ten minutes
+tule restart               # restarts every container, and waits until healthy
+tule restart object-store
+tule reset queues          # deletes queues' data, after asking
+tule reset queues --yes    # without asking
+```
+
+`logs` and `restart` read the stack back from its containers, so they work
+from any directory. `restart` restarts the containers as they are: it
+does not recreate them, so a changed `tule.yaml` is not applied (that is
+`up`), and their data stays. It then waits up to three minutes for each to
+be running and, when its image has a health check, healthy, and fails
+when one stops or turns unhealthy.
+
+`reset` removes the containers of the services named and their volumes,
+and starts them again with empty volumes; the other services keep running
+and keep their data. It asks on the terminal first, and without one (in a
+script, or with standard input redirected) it refuses unless `--yes` is
+given. A service without data, the console, cannot be reset. Resetting
+functions also removes its function containers, since the functions they
+ran are deleted with its data.
 
 Two stacks run side by side under different `--stack` names, the second
 with a `portOffset` in its `tule.yaml`:
@@ -108,28 +148,54 @@ gets queues' endpoint only when queues is selected, and every service
 accepts the keys identity issues only when identity is selected. The
 console needs at least one other service.
 
-functions is never in the default set: it mounts the Docker socket, which
-is root-equivalent on the host. Name it to include it, and give it the
-group ID that owns the socket on the Docker host with `--docker-gid`, which
-is required with functions. On Linux:
+`tule compose` writes functions only when it is named, and needs the group
+ID that owns the Docker socket on the Docker host with `--docker-gid`
+(see [functions](#functions) for finding it):
 
 ```sh
 tule compose functions queues --docker-gid "$(stat -c %g /var/run/docker.sock)"
 ```
 
-With Docker Desktop (macOS, Windows), the socket functions sees is the one
-inside Docker Desktop's VM, whose group is not the one `stat` reports on the
-host; this prints it:
+The file names its project (`name: <stack>`), and functions attaches its
+function containers to the project's network by its Docker name,
+`<stack>_default`; run it under another project name, with `docker
+compose -p`, and functions refuses to start, since that network does not
+exist.
+
+### functions
+
+functions is never in the default set: it mounts the Docker socket, which
+is root-equivalent on the host. Name it to add it:
+
+```sh
+tule up functions
+```
+
+It runs each function in a container of its own, through the Docker
+daemon, and attaches those containers to the stack's network
+(`<stack>_default`, with `TULE_Functions_ContainerNetwork`). There they
+reach functions' Runtime API at `functions:9061`, so that port is not
+published on the host, and the other services by their names, such as
+`http://queues:9050`: set those in a function's `Environment` (for
+example `AWS_ENDPOINT_URL_SQS=http://queues:9050`) for its SDK to call the
+stack. Only the Lambda API, 9060, is published.
+
+functions reaches the socket through the group that owns it, which `up`
+finds on the Docker daemon itself, with a throwaway container from the
+functions image (pulled for the stack anyway):
 
 ```sh
 docker run --rm --entrypoint stat -v /var/run/docker.sock:/s ghcr.io/tulehq/functions:0.7.0 -c %g /s
 ```
 
-functions' README marks the Docker Desktop setup as untried. Function containers reach functions' Runtime
-API through the host, which on a native Linux daemon does not answer on a
-port published only on 127.0.0.1; until functions can attach them to the
-stack network, a functions stack on Linux needs `bind: 0.0.0.0`, and so a
-`rootKey` of your own.
+The mount is made by the daemon, so the group is the socket's on the
+daemon's host: the Linux host, the VM inside Docker Desktop (whose group
+is not the one `stat` reports on a Mac), or a remote host. Once functions
+runs, later `up`, `down` and `reset` keep the group its container has.
+`--docker-gid` on `up` sets the group instead. functions' README marks the
+Docker Desktop setup as untried, and says to run the image as root when
+the socket there is owned by root with no group access, which `tule` does
+not do.
 
 ### tule env
 
@@ -142,6 +208,17 @@ tule env --shell powershell | Out-String | Invoke-Expression
 In PowerShell, keep `Out-String`: without it, `Invoke-Expression` gets the
 output a line at a time. `tule env` refuses to print a value that holds a
 newline or another control character, in every shell.
+
+With the stack running, `tule env` reads it back from its containers: the
+services that have containers, the host ports they publish, and the root
+key they were started with, so it works from any directory. The endpoint
+host is `publicHost` when it runs where the stack's `tule.yaml` is found;
+elsewhere, it is `localhost` for a stack published on a loopback address
+or on every address, and the address it is published on otherwise. A
+stopped container publishes no port, and its service is left out with a
+warning. With no stack running, the variables are those of the configured
+services. Standard error says which. Either way, `tule env` asks the Docker
+daemon whether the stack runs.
 
 It sets `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION` and
 `AWS_DEFAULT_REGION`, unsets `AWS_SESSION_TOKEN`, and sets an
@@ -188,8 +265,8 @@ env: {object-store: {TULE_Server_Domain: localhost}}  # extra variables, set ove
 ```
 
 - Services named on the command line replace `services`.
-- `ports` sets a service's API port; functions' Runtime API port, 9061,
-  moves with `portOffset` only.
+- `ports` sets a service's API port; each service publishes that one
+  port.
 - `versions` takes release versions: `0.13.1`, or with a prerelease,
   `0.14.0-rc.1`.
 - `rootKey` defaults to the AWS documentation's example key above. Its id

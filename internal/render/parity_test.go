@@ -171,6 +171,9 @@ type difference struct {
 // profile, but its file configures it, and its wiring is what is compared.
 func paritySelection() []string { return catalog.Names() }
 
+// parityStack is the stack the render is compared as.
+const parityStack = "tule"
+
 // parityDocker is what the render is given for the socket: the socket compose
 // mounts, and group 0, what compose's ${DOCKER_GID:-0} is when unset.
 var parityDocker = Docker{SocketPath: "/var/run/docker.sock", GroupID: "0"}
@@ -206,10 +209,38 @@ var intendedDifferences = []difference{
 		},
 	},
 	{
+		// Follow-up: console's compose.yaml attaches the function containers
+		// to its network too. When it does, this entry no longer applies and
+		// fails, and is removed.
+		name: "functions on the stack network",
+		reason: "the CLI attaches the function containers to the stack network " +
+			"(TULE_Functions_ContainerNetwork, functions 0.7.0), where they reach the " +
+			"Runtime API at functions:9061, so it does not publish 9061; console's " +
+			"compose.yaml still has them call host.docker.internal:9061",
+		apply: func(c *paritySide) bool {
+			s := c.services[catalog.Functions]
+			if s == nil {
+				return false
+			}
+			if _, ok := s.Environment["TULE_Functions_ContainerNetwork"]; ok {
+				return false
+			}
+			runtime := slices.Index(s.Ports, "127.0.0.1:9061:9061")
+			if runtime < 0 {
+				return false
+			}
+			s.Ports = slices.Delete(s.Ports, runtime, runtime+1)
+			s.Environment["TULE_Functions_ContainerNetwork"] = NetworkName(parityStack)
+			s.Environment["TULE_Functions_RuntimeAPIHost"] = catalog.Functions
+			s.Environment["TULE_Functions_RuntimeAPIBind"] = "0.0.0.0"
+			return true
+		},
+	},
+	{
 		name: "DOCKER_GID interpolation",
 		reason: "compose reads the socket's group from DOCKER_GID at up, defaulting to " +
-			"0; the CLI writes the group it is given (the --docker-gid flag for now, " +
-			"probed from the daemon later); the check gives it 0",
+			"0; the CLI writes the group it is given (probed on the daemon by tule up, " +
+			"or --docker-gid); the check gives it 0",
 		apply: func(c *paritySide) bool {
 			s := c.services[catalog.Functions]
 			if s == nil || !slices.Equal(s.GroupAdd, []string{"${DOCKER_GID:-0}"}) {
@@ -274,7 +305,7 @@ func TestParityWithConsoleCompose(t *testing.T) {
 	}
 
 	renderedYAML := renderYAML(t, Input{
-		Stack:     "tule",
+		Stack:     parityStack,
 		Config:    parse(t, ""),
 		Selection: selection(t, paritySelection()...),
 		Docker:    parityDocker,

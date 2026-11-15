@@ -47,11 +47,8 @@ func TestEnvVariables(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	vars, err := envVariables(cfg, sel)
-	if err != nil {
-		t.Fatal(err)
-	}
 	got := map[string]string{}
+	vars := configVariables(t, cfg, sel)
 	order := make([]string, 0, len(vars))
 	for _, v := range vars {
 		got[v.name] = v.value
@@ -82,11 +79,25 @@ func TestEnvVariables(t *testing.T) {
 	}
 }
 
-func TestEnvOnlySelectedServices(t *testing.T) {
-	dir := writeConfig(t, "services: [queues]\n")
-	out, _, err := run(t, dir, "env")
+// configVariables is the variables of the configured services.
+func configVariables(t *testing.T, cfg *config.Config, sel catalog.Selection) []variable {
+	t.Helper()
+	src, err := configSource(cfg, sel)
 	if err != nil {
 		t.Fatal(err)
+	}
+	return envVariables(src)
+}
+
+func TestEnvOnlySelectedServices(t *testing.T) {
+	dir := writeConfig(t, "services: [queues]\n")
+	out, stderr, err := runCapture(t, &fakeRuntime{}, dir, "env")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stderr, "stack tule is not running; the variables are for "+
+		filepath.Join(dir, config.FileName)+"'s services: queues") {
+		t.Errorf("stderr does not say the variables are the configured ones:\n%s", stderr)
 	}
 	if !strings.Contains(out, "AWS_ENDPOINT_URL_SQS='http://localhost:9050'") {
 		t.Errorf("output lacks the SQS endpoint:\n%s", out)
@@ -222,11 +233,7 @@ func TestS3EndpointHost(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			vars, err := envVariables(cfg, sel)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, v := range vars {
+			for _, v := range configVariables(t, cfg, sel) {
 				if v.name == "AWS_ENDPOINT_URL_S3" {
 					if v.value != tt.want {
 						t.Errorf("AWS_ENDPOINT_URL_S3 = %q, want %q", v.value, tt.want)

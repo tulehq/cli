@@ -52,10 +52,12 @@ services:
       TULE_Auth_AccessKeyID: AKIAIOSFODNN7EXAMPLE
       TULE_Auth_IdentityEndpoint: http://identity:9030
       TULE_Auth_SecretAccessKey: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+      TULE_Functions_ContainerNetwork: tule_default
       TULE_Functions_QueuesEndpoint: http://queues:9050
+      TULE_Functions_RuntimeAPIBind: 0.0.0.0
+      TULE_Functions_RuntimeAPIHost: functions
     ports:
       - 127.0.0.1:9060:9060
-      - 127.0.0.1:9061:9061
     volumes:
       - functionsdata:/data
       - /var/run/docker.sock:/var/run/docker.sock

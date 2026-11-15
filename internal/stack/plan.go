@@ -1,11 +1,14 @@
 package stack
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"maps"
 	"slices"
 	"strings"
+
+	"golang.org/x/mod/semver"
 
 	"tule.dev/cli/internal/catalog"
 	"tule.dev/cli/internal/render"
@@ -39,6 +42,47 @@ type VersionChange struct {
 	To      string
 }
 
+// Downgrade reports whether the change goes down a version, or between
+// versions that cannot be ordered, such as a tag that is not a release
+// version: either may leave the data newer than the service reading it.
+func (v VersionChange) Downgrade() bool {
+	from, to := "v"+v.From, "v"+v.To
+	if !semver.IsValid(from) || !semver.IsValid(to) {
+		return true
+	}
+	return semver.Compare(to, from) < 0
+}
+
+// Downgrades returns the version changes that go down a version.
+func (p Plan) Downgrades() []VersionChange {
+	var out []VersionChange
+	for _, v := range p.Versions {
+		if v.Downgrade() {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// ErrDowngrade is wrapped by CheckDowngrades.
+var ErrDowngrade = errors.New("going down a version")
+
+// CheckDowngrades refuses a plan that takes a running service down a
+// version. Services read data written by a newer version as they find it,
+// and object-store documents that a downgrade serves stale data.
+func (p Plan) CheckDowngrades() error {
+	downs := p.Downgrades()
+	if len(downs) == 0 {
+		return nil
+	}
+	parts := make([]string, 0, len(downs))
+	for _, v := range downs {
+		parts = append(parts, fmt.Sprintf("%s %s -> %s", v.Service, v.From, v.To))
+	}
+	return fmt.Errorf("%w: %s; data a newer version wrote may not read back right",
+		ErrDowngrade, strings.Join(parts, ", "))
+}
+
 // NewPlan compares the project p, published on bindings, with the stack s.
 func NewPlan(s *State, p *render.Project, bindings []Binding) Plan {
 	var plan Plan
@@ -70,6 +114,9 @@ func (p *Plan) compare(
 	reasons := envChanges(have, want.Environment)
 	if portsChanged(have, bindings, name) {
 		reasons = append(reasons, "host ports changed")
+	}
+	if !slices.Equal(have.GroupAdd, unescapeAll(want.GroupAdd)) {
+		reasons = append(reasons, "Docker socket group changed")
 	}
 	if len(reasons) > 0 {
 		p.Recreate = append(p.Recreate, Change{Service: name, Reasons: reasons})
@@ -147,6 +194,14 @@ func unescape(s string) string {
 	return strings.ReplaceAll(s, "$$", "$")
 }
 
+func unescapeAll(l []string) []string {
+	out := make([]string, 0, len(l))
+	for _, v := range l {
+		out = append(out, unescape(v))
+	}
+	return out
+}
+
 // Write prints the plan: version changes, then the services recreated, then
 // those removed and added. It prints nothing when nothing changes.
 func (p Plan) Write(w io.Writer) error {
@@ -154,7 +209,11 @@ func (p Plan) Write(w io.Writer) error {
 	if len(p.Versions) > 0 {
 		b.WriteString("Version changes:\n")
 		for _, v := range p.Versions {
-			fmt.Fprintf(&b, "  %s %s -> %s\n", v.Service, v.From, v.To)
+			note := ""
+			if v.Downgrade() {
+				note = " (downgrade)"
+			}
+			fmt.Fprintf(&b, "  %s %s -> %s%s\n", v.Service, v.From, v.To, note)
 		}
 	}
 	if len(p.Recreate) > 0 {
