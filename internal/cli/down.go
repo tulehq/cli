@@ -42,14 +42,18 @@ func newDownCommand(g *globals) *cobra.Command {
 	return cmd
 }
 
-// downStack removes every container, the network, and with volumes, every
-// volume of the stack.
+// downStack removes every container, the network, and with volumes, the
+// volumes of every catalog service. It needs no configuration, so it works
+// on a stack whose containers disagree on theirs.
 func (g *globals) downStack(
 	cmd *cobra.Command,
 	rt runtime.Runtime,
 	st *stack.State,
 	volumes bool,
 ) error {
+	if err := warnConfigConflict(cmd, st); err != nil {
+		return err
+	}
 	// They hold the stack's network, which compose removes next.
 	if err := removeFunctionContainers(cmd, rt, g.stack); err != nil {
 		return err
@@ -63,7 +67,7 @@ func (g *globals) downStack(
 	removed := 0
 	if volumes {
 		var err error
-		if removed, err = removeAllVolumes(cmd, rt, g.stack); err != nil {
+		if removed, err = removeCatalogVolumes(cmd, rt, g.stack); err != nil {
 			return err
 		}
 	}
@@ -80,6 +84,22 @@ func (g *globals) downStack(
 	}
 }
 
+// removeCatalogVolumes deletes the stack's volumes of every catalog
+// service, those of services removed earlier included, and returns how
+// many. Other volumes in the stack's compose project are left alone.
+func removeCatalogVolumes(cmd *cobra.Command, rt runtime.Runtime, name string) (int, error) {
+	// Read again: compose down has removed the volumes it knew of.
+	st, err := stack.Read(cmd.Context(), rt, name)
+	if err != nil {
+		return 0, err //nolint:wrapcheck // Says which stack and what failed.
+	}
+	names := st.VolumeNames(stack.CatalogVolumeKeys())
+	if err := rt.RemoveVolumes(cmd.Context(), names); err != nil {
+		return 0, err //nolint:wrapcheck // The runtime says what failed.
+	}
+	return len(names), nil
+}
+
 // removeFunctionContainers removes the function containers on the stack's
 // network, and says how many there were.
 func removeFunctionContainers(cmd *cobra.Command, rt runtime.Runtime, name string) error {
@@ -91,23 +111,6 @@ func removeFunctionContainers(cmd *cobra.Command, rt runtime.Runtime, name strin
 		return nil
 	}
 	return writeLine(cmd, fmt.Sprintf("removed %d function containers", n))
-}
-
-// removeAllVolumes deletes every volume of the stack, those of services
-// removed earlier included, and returns how many.
-func removeAllVolumes(cmd *cobra.Command, rt runtime.Runtime, name string) (int, error) {
-	left, err := rt.Volumes(cmd.Context(), name)
-	if err != nil {
-		return 0, err //nolint:wrapcheck // The runtime says what failed.
-	}
-	names := make([]string, 0, len(left))
-	for _, v := range left {
-		names = append(names, v.Name)
-	}
-	if err := rt.RemoveVolumes(cmd.Context(), names); err != nil {
-		return 0, err //nolint:wrapcheck // The runtime says what failed.
-	}
-	return len(names), nil
 }
 
 // downProject is the project compose takes down: the stack's services as
@@ -126,11 +129,18 @@ func downProject(st *stack.State) *render.Project {
 			Labels: map[string]string{},
 		}
 		if svc := mustLookup(name); svc.Volume != "" {
-			p.Volumes[svc.Volume] = render.Volume{Labels: map[string]string{}}
+			p.Volumes[svc.Volume] = render.Volume{}
 		}
 	}
 	return p
 }
+
+// errDownKeepsFunctions is returned when removing services would re-render
+// a stack that keeps functions, which tule does not render for a stack yet.
+var errDownKeepsFunctions = errors.New(
+	"the stack runs functions, which tule does not manage yet, so it cannot remove " +
+		"other services alone; name functions too, or remove the whole stack with tule down",
+)
 
 // downServices removes services from the stack's selection and brings the
 // stack to the rest.
@@ -148,6 +158,9 @@ func (g *globals) downServices(
 	if len(rest) == 0 {
 		return g.downStack(cmd, rt, st, volumes)
 	}
+	if slices.Contains(rest, catalog.Functions) {
+		return errDownKeepsFunctions
+	}
 	sel, err := catalog.NewSelection(rest)
 	if errors.Is(err, catalog.ErrConsoleAlone) {
 		return fmt.Errorf(
@@ -163,9 +176,9 @@ func (g *globals) downServices(
 		return err
 	}
 	if err = st.CheckConfig(cfg.Path); err != nil {
-		return err //nolint:wrapcheck // Names both config files.
+		return err //nolint:wrapcheck // Names the config files.
 	}
-	if err = g.apply(cmd, rt, cfg, st, sel); err != nil {
+	if err = g.apply(cmd, rt, cfg, st, sel, true); err != nil {
 		return err
 	}
 	if err = removeLeftovers(cmd, rt, st, names, volumes); err != nil {
@@ -177,27 +190,24 @@ func (g *globals) downServices(
 	)
 }
 
-// remaining returns the stack's selection without names, which it must
-// hold.
+// remaining returns the stack's services without names, which it must
+// have.
 func remaining(st *stack.State, names []string) ([]string, error) {
 	if !st.Running() {
 		return nil, fmt.Errorf("stack %q is not running", st.Name)
 	}
+	services := st.Services()
 	for _, name := range names {
 		if _, err := catalog.Lookup(name); err != nil {
 			return nil, fmt.Errorf("down: %w", err)
 		}
-		if !st.Selection.Has(name) {
-			return nil, fmt.Errorf(
-				"stack %q does not run %s; it runs %s",
-				st.Name,
-				name,
-				st.Selection,
-			)
+		if !slices.Contains(services, name) {
+			return nil, fmt.Errorf("stack %q does not run %s; it runs %s",
+				st.Name, name, strings.Join(services, ", "))
 		}
 	}
 	var rest []string
-	for _, name := range st.Selection.Names() {
+	for _, name := range services {
 		if !slices.Contains(names, name) {
 			rest = append(rest, name)
 		}

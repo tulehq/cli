@@ -8,10 +8,8 @@ import (
 	"tule.dev/cli/internal/runtime"
 )
 
-// States of a service beyond the ones Docker reports.
+// Docker's states.
 const (
-	// StateMissing is a selected service with no container.
-	StateMissing = "missing"
 	// StateRunning is Docker's state of a running container.
 	StateRunning = "running"
 	// HealthHealthy is Docker's health of a container passing its checks.
@@ -21,7 +19,7 @@ const (
 // ServiceStatus is one service of a stack.
 type ServiceStatus struct {
 	Name string `json:"name"`
-	// State is the container's state, or StateMissing.
+	// State is the container's state.
 	State string `json:"state"`
 	// Health is the container's health check status; empty when its image
 	// has none.
@@ -32,28 +30,21 @@ type ServiceStatus struct {
 	Address string `json:"address"`
 	// Volume is the volume holding its data.
 	Volume string `json:"volume"`
-	// Selected is false for a container left from a service no longer in
-	// the selection.
-	Selected bool `json:"selected"`
 	// Healthy is a running container whose health check, when it has one,
 	// passes.
 	Healthy bool `json:"healthy"`
 }
 
-// Status returns every selected service and every service with a
-// container, in catalog order.
+// Status returns every service with a container, in catalog order.
 func (s *State) Status() []ServiceStatus {
-	var out []ServiceStatus
+	out := []ServiceStatus{}
 	for _, svc := range catalog.All() {
-		c, running := s.Containers[svc.Name]
-		selected := s.Selection.Has(svc.Name)
-		if !running && !selected {
+		c, ok := s.Containers[svc.Name]
+		if !ok {
 			continue
 		}
-		st := ServiceStatus{Name: svc.Name, Selected: selected, State: StateMissing}
-		if running {
-			st.fromContainer(svc, c)
-		}
+		st := ServiceStatus{Name: svc.Name}
+		st.fromContainer(svc, c)
 		out = append(out, st)
 	}
 	return out

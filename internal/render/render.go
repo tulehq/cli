@@ -16,13 +16,16 @@ import (
 	"tule.dev/cli/internal/config"
 )
 
-// Labels set on every service, and on every volume.
+// Labels set on every service. Each is the same for a service whatever
+// else is selected, so a change of selection does not enter the config
+// hash compose recreates containers by. Volumes carry no tule labels:
+// compose asks to recreate a volume, deleting its data, when the labels it
+// was created with change, and console's compose.yaml creates them with
+// none.
 const (
-	LabelStack     = "dev.tule.stack"
-	LabelService   = "dev.tule.service"
-	LabelConfig    = "dev.tule.config"
-	LabelSelection = "dev.tule.selection"
-	LabelVersion   = "dev.tule.version"
+	LabelStack   = "dev.tule.stack"
+	LabelService = "dev.tule.service"
+	LabelConfig  = "dev.tule.config"
 )
 
 // Project is a compose project. Its fields are in the order they are
@@ -53,10 +56,8 @@ type Dependency struct {
 	Condition string `yaml:"condition"`
 }
 
-// Volume is a named volume.
-type Volume struct {
-	Labels map[string]string `yaml:"labels"`
-}
+// Volume is a named volume, with compose's defaults.
+type Volume struct{}
 
 // Docker is how a service that runs containers reaches the Docker daemon:
 // the daemon's socket, and the group that owns it on the daemon's host,
@@ -71,11 +72,6 @@ type Input struct {
 	Config *config.Config
 	// Docker is required when a selected service mounts the Docker socket.
 	Docker Docker
-	// VolumeVersions maps the key of each volume that already exists, such
-	// as queuesdata, to the dev.tule.version it was created with. Its label
-	// is rendered as created: compose asks to recreate a volume, deleting
-	// its data, when the labels it was created with change.
-	VolumeVersions map[string]string
 	// Stack is the project name.
 	Stack     string
 	Selection catalog.Selection
@@ -121,13 +117,7 @@ func Render(in Input) (*Project, error) {
 		}
 		p.Services[svc.Name] = s
 		if svc.Volume != "" {
-			version, ok := in.VolumeVersions[svc.Volume]
-			if !ok {
-				version = in.Config.Version(svc)
-			}
-			p.Volumes[svc.Volume] = Volume{Labels: map[string]string{
-				LabelVersion: escape(version),
-			}}
+			p.Volumes[svc.Volume] = Volume{}
 		}
 	}
 	return p, nil
@@ -142,10 +132,9 @@ func renderService(in Input, svc *catalog.Service, wiring catalog.Wiring) (Servi
 		Image:       svc.ImageRef(version),
 		Environment: env,
 		Labels: map[string]string{
-			LabelStack:     in.Stack,
-			LabelService:   svc.Name,
-			LabelConfig:    in.Config.Path,
-			LabelSelection: in.Selection.String(),
+			LabelStack:   in.Stack,
+			LabelService: svc.Name,
+			LabelConfig:  in.Config.Path,
 		},
 	}
 	for _, dep := range svc.DependsOn {

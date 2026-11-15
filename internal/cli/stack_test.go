@@ -97,17 +97,29 @@ func (f *fakeRuntime) RemoveFunctionContainers(context.Context, string) (int, er
 // its standard output. Its standard error is logged.
 func runWith(t *testing.T, rt runtime.Runtime, dir string, args ...string) (string, error) {
 	t.Helper()
+	out, _, err := runCapture(t, rt, dir, args...)
+	return out, err
+}
+
+// runCapture is runWith, returning standard error too.
+func runCapture(
+	t *testing.T,
+	rt runtime.Runtime,
+	dir string,
+	args ...string,
+) (stdout, stderr string, err error) {
+	t.Helper()
 	t.Chdir(dir)
 	root := newRootCommand(func(io.Writer) runtime.Runtime { return rt })
 	var out, errOut bytes.Buffer
 	root.SetOut(&out)
 	root.SetErr(&errOut)
 	root.SetArgs(args)
-	err := root.Execute()
+	err = root.Execute()
 	if errOut.Len() > 0 {
 		t.Logf("tule %s: stderr:\n%s", strings.Join(args, " "), errOut.String())
 	}
-	return out.String(), err
+	return out.String(), errOut.String(), err
 }
 
 // freePorts is a config whose ports are free on this machine, so the port
@@ -146,7 +158,11 @@ func selectionOf(t *testing.T, rt *fakeRuntime) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return st.Selection.String()
+	sel, err := st.Selection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sel.String()
 }
 
 func TestUpNewStackStartsTheDefaultSet(t *testing.T) {
@@ -243,6 +259,23 @@ func TestUpChecksPortsFirst(t *testing.T) {
 	}
 }
 
+func TestUpSkipPortCheck(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = l.Close() }()
+	port := l.Addr().(*net.TCPAddr).Port
+	rt := &fakeRuntime{}
+	dir := writeConfig(t, freePorts(t)+"ports: {queues: "+strconv.Itoa(port)+"}\n")
+	if _, err = runWith(t, rt, dir, "up", "queues", "--skip-port-check"); err != nil {
+		t.Errorf("up --skip-port-check on a busy port = %v", err)
+	}
+	if len(rt.ups) != 1 {
+		t.Error("did not run up")
+	}
+}
+
 func TestUpNamesTheMissingComposePlugin(t *testing.T) {
 	rt := &fakeRuntime{checkErr: errors.New("install the Docker Compose v2 plugin")}
 	_, err := runWith(t, rt, writeConfig(t, ""), "up")
@@ -327,24 +360,36 @@ func TestDownStack(t *testing.T) {
 		t.Fatal(err)
 	}
 	rt.functions = 2
+	foreign := runtime.Volume{Name: "tule_pgdata", Labels: map[string]string{
+		runtime.LabelProject: "tule", runtime.LabelVolume: "pgdata",
+	}}
+	rt.volumes = append(rt.volumes, foreign)
 	// down without names works from any directory.
 	out, err := runWith(t, rt, t.TempDir(), "down", "--volumes")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rt.containers) != 0 || len(rt.volumes) != 0 {
-		t.Errorf("containers = %v, volumes = %v", rt.containers, rt.volumes)
+	if len(rt.containers) != 0 || len(rt.volumes) != 1 || rt.volumes[0].Name != foreign.Name {
+		t.Errorf("containers = %v, volumes = %v; want only the foreign volume left",
+			rt.containers, rt.volumes)
 	}
-	if !rt.downVolumes {
-		t.Error("compose down ran without --volumes")
-	}
-	down := rt.downs[0]
-	if !slices.Equal(slices.Sorted(maps.Keys(down.Services)), []string{"object-store"}) {
-		t.Errorf("down project services = %v", slices.Sorted(maps.Keys(down.Services)))
-	}
+	checkDownProject(t, rt, catalog.ObjectStore)
 	if !strings.Contains(out, "removed 2 function containers") ||
 		!strings.Contains(out, "stack tule is down") {
 		t.Errorf("output:\n%s", out)
+	}
+}
+
+// checkDownProject checks compose down ran once, with --volumes, on a
+// project of the services named.
+func checkDownProject(t *testing.T, rt *fakeRuntime, services ...string) {
+	t.Helper()
+	if len(rt.downs) != 1 || !rt.downVolumes {
+		t.Fatalf("compose down ran %d times, with --volumes %v; want once, with it",
+			len(rt.downs), rt.downVolumes)
+	}
+	if got := slices.Sorted(maps.Keys(rt.downs[0].Services)); !slices.Equal(got, services) {
+		t.Errorf("down project services = %v, want %v", got, services)
 	}
 }
 
@@ -388,5 +433,117 @@ func TestStatusWithoutAStack(t *testing.T) {
 	_, err := runWith(t, &fakeRuntime{}, t.TempDir(), "status")
 	if err == nil || !strings.Contains(err.Error(), "not running") {
 		t.Errorf("status = %v", err)
+	}
+	out, err := runWith(t, &fakeRuntime{}, t.TempDir(), "status", "--json")
+	if err == nil || !strings.Contains(err.Error(), "not running") {
+		t.Errorf("status --json = %v", err)
+	}
+	var got statusJSON
+	if jsonErr := json.Unmarshal([]byte(out), &got); jsonErr != nil ||
+		got.Services == nil || len(got.Services) != 0 || got.Configs == nil {
+		t.Errorf("status --json = %q (%v), want empty lists", out, jsonErr)
+	}
+}
+
+// twoConfigStack is a stack whose containers were started from two config
+// files: queues from one, object-store from none.
+func twoConfigStack(t *testing.T) (rt *fakeRuntime, dir string) {
+	t.Helper()
+	ports := freePorts(t)
+	dir = writeConfig(t, ports)
+	rt = &fakeRuntime{}
+	if _, err := runWith(t, rt, dir, "up", "queues"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _, err := config.Parse([]byte(ports))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel, err := catalog.NewSelection([]string{catalog.ObjectStore})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := render.Render(render.Input{Stack: "tule", Config: cfg, Selection: sel})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt.containers = append(rt.containers, stacktest.Containers(p)...)
+	rt.volumes = append(rt.volumes, stacktest.Volumes(p)...)
+	return rt, dir
+}
+
+func TestTwoConfigsStatusAndDownStillWork(t *testing.T) {
+	rt, dir := twoConfigStack(t)
+	_, err := runWith(t, rt, dir, "up")
+	if err == nil || !strings.Contains(err.Error(), "tule down --stack tule") {
+		t.Errorf("up = %v, want it to point at tule down", err)
+	}
+	_, stderr, err := runCapture(t, rt, t.TempDir(), "status")
+	if err != nil || !strings.Contains(stderr, "more than one config file") {
+		t.Errorf("status = %v, stderr %q; want a warning and success", err, stderr)
+	}
+	_, stderr, err = runCapture(t, rt, t.TempDir(), "down", "--volumes")
+	if err != nil || !strings.Contains(stderr, "more than one config file") {
+		t.Errorf("down --volumes = %v, stderr %q", err, stderr)
+	}
+	if len(rt.containers) != 0 || len(rt.volumes) != 0 {
+		t.Errorf("containers = %v, volumes = %v", rt.containers, rt.volumes)
+	}
+}
+
+func TestDownServiceKeepingFunctions(t *testing.T) {
+	cfg, _, err := config.Parse([]byte(freePorts(t)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel, err := catalog.NewSelection(
+		[]string{catalog.Functions, catalog.Queues, catalog.ObjectStore},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := render.Render(render.Input{
+		Stack: "tule", Config: cfg, Selection: sel,
+		Docker: render.Docker{SocketPath: dockerSocket, GroupID: "989"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := &fakeRuntime{containers: stacktest.Containers(p)}
+	_, err = runWith(t, rt, t.TempDir(), "down", "object-store")
+	if !errors.Is(err, errDownKeepsFunctions) {
+		t.Errorf("down object-store = %v, want %v", err, errDownKeepsFunctions)
+	}
+	if _, err := runWith(t, rt, t.TempDir(), "down", "functions", "queues"); err != nil {
+		t.Errorf("down functions queues = %v", err)
+	}
+	if got := selectionOf(t, rt); got != "object-store" {
+		t.Errorf("selection = %s", got)
+	}
+}
+
+func TestBareUpWarnsConfiguredServicesAreIgnored(t *testing.T) {
+	dir := writeConfig(t, freePorts(t)+"services: [object-store]\n")
+	rt := &fakeRuntime{}
+	if _, err := runWith(t, rt, dir, "up"); err != nil {
+		t.Fatal(err)
+	}
+	_, stderr, err := runCapture(t, rt, dir, "up")
+	if err != nil || strings.Contains(stderr, "services:") {
+		t.Errorf("up matching services: = %v, stderr %q; want no warning", err, stderr)
+	}
+	if _, err = runWith(t, rt, dir, "up", "queues"); err != nil {
+		t.Fatal(err)
+	}
+	_, stderr, err = runCapture(t, rt, dir, "up")
+	if err != nil ||
+		!strings.Contains(
+			stderr,
+			"services: (object-store) differ from the running stack's (object-store,queues)",
+		) {
+		t.Errorf("up = %v, stderr %q", err, stderr)
+	}
+	if got := selectionOf(t, rt); got != "object-store,queues" {
+		t.Errorf("selection = %s", got)
 	}
 }

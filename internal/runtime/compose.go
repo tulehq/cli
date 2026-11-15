@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -99,18 +102,25 @@ func (c *Compose) Restart(ctx context.Context, p *render.Project, services []str
 }
 
 // composeArgs is the docker command line for a compose verb on p, which is
-// read from standard input.
-func composeArgs(p *render.Project, verb ...string) []string {
-	return append([]string{"compose", "--project-name", p.Name, "--file", "-"}, verb...)
+// read from standard input, with envFile as compose's only env file.
+func composeArgs(p *render.Project, envFile string, verb ...string) []string {
+	return append([]string{
+		"compose", "--project-name", p.Name, "--file", "-", "--env-file", envFile,
+	}, verb...)
 }
 
-func (c *Compose) compose(ctx context.Context, p *render.Project, verb ...string) error {
+func (c *Compose) compose(ctx context.Context, p *render.Project, verb ...string) (err error) {
 	data, err := p.YAML()
 	if err != nil {
 		return err //nolint:wrapcheck // Already says what it failed to do.
 	}
+	envFile, cleanup, err := emptyEnvFile()
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, cleanup()) }()
 	//nolint:gosec // The arguments are tule's own; the stack name is validated.
-	cmd := exec.CommandContext(ctx, dockerBinary, composeArgs(p, verb...)...)
+	cmd := exec.CommandContext(ctx, dockerBinary, composeArgs(p, envFile, verb...)...)
 	cmd.Stdin = bytes.NewReader(data)
 	cmd.Stdout = c.Out
 	cmd.Stderr = c.Out
@@ -118,6 +128,35 @@ func (c *Compose) compose(ctx context.Context, p *render.Project, verb ...string
 		return fmt.Errorf("docker compose %s: %w", verb[0], err)
 	}
 	return nil
+}
+
+// emptyEnvFile makes an empty file to pass compose as --env-file, and
+// returns its path and a function that removes it.
+//
+// Without --env-file, compose loads the .env in its working directory: it
+// interpolates the compose file with it and takes COMPOSE_* settings such as
+// COMPOSE_IGNORE_ORPHANS from it ("Load PWD/.env if present and no explicit
+// --env-file has been set" in docker/compose cmd/compose/compose.go; the
+// default lookup is in compose-go's cli.WithEnvFiles, which uses the files
+// given instead of it). The file tule runs is the whole stack, so a .env
+// left in the directory tule runs from must not change it. An explicit
+// --env-file also takes precedence over COMPOSE_ENV_FILES.
+func emptyEnvFile() (string, func() error, error) {
+	dir, err := os.MkdirTemp("", "tule-compose-")
+	if err != nil {
+		return "", nil, fmt.Errorf("make compose's empty env file: %w", err)
+	}
+	cleanup := func() error {
+		if err := os.RemoveAll(dir); err != nil {
+			return fmt.Errorf("remove compose's empty env file: %w", err)
+		}
+		return nil
+	}
+	path := filepath.Join(dir, "empty.env")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		return "", nil, errors.Join(fmt.Errorf("make compose's empty env file: %w", err), cleanup())
+	}
+	return path, cleanup, nil
 }
 
 // output runs docker with args and returns its standard output. The error

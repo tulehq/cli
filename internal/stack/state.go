@@ -14,21 +14,18 @@ import (
 	"tule.dev/cli/internal/runtime"
 )
 
-// State is a stack as its containers and volumes report it.
+// State is a stack as its containers and volumes report it. Its selection
+// is the catalog services that have containers, running or not.
 type State struct {
 	// Containers maps a service name to its container.
 	Containers map[string]runtime.Container
+	// configs maps each dev.tule.config value to the services whose
+	// containers carry it.
+	configs map[string][]string
 	// Name is the stack name.
 	Name string
-	// ConfigPath is the absolute path of the tule.yaml the stack was
-	// started from, or empty when it was started with none.
-	ConfigPath string
-	// Warnings are worth saying before acting on the state.
-	Warnings []string
 	// Volumes are the stack's volumes, with or without containers.
 	Volumes []runtime.Volume
-	// Selection is the stack's selection; zero when it has no containers.
-	Selection catalog.Selection
 }
 
 // Read reads the stack named name back from the runtime.
@@ -50,22 +47,19 @@ func (s *State) Running() bool {
 }
 
 // FromContainers builds the state of the stack named name from its
-// containers and volumes. Every container must be one tule created, and
-// all must name the same config file. The selection is the one the
-// containers' labels agree on; when they disagree, as an interrupted up or
-// down leaves them, it is the services that have containers, with a
-// warning.
+// containers and volumes. Every container must be one tule created, one per
+// service.
 func FromContainers(
 	name string,
 	containers []runtime.Container,
 	volumes []runtime.Volume,
 ) (*State, error) {
-	s := &State{Name: name, Containers: map[string]runtime.Container{}, Volumes: volumes}
-	if len(containers) == 0 {
-		return s, nil
+	s := &State{
+		Name:       name,
+		Containers: map[string]runtime.Container{},
+		configs:    map[string][]string{},
+		Volumes:    volumes,
 	}
-	configs := map[string][]string{}
-	selections := map[string]bool{}
 	for _, c := range containers {
 		svc := c.Labels[render.LabelService]
 		if _, err := catalog.Lookup(svc); err != nil {
@@ -81,58 +75,56 @@ func FromContainers(
 		}
 		s.Containers[svc] = c
 		path := c.Labels[render.LabelConfig]
-		configs[path] = append(configs[path], svc)
-		selections[c.Labels[render.LabelSelection]] = true
+		s.configs[path] = append(s.configs[path], svc)
 	}
-	if len(configs) > 1 {
-		return nil, configsDisagree(name, configs)
-	}
-	for path := range configs {
-		s.ConfigPath = path
-	}
-	sel, err := s.agreedSelection(selections)
-	if err != nil {
-		return nil, err
-	}
-	s.Selection = sel
 	return s, nil
 }
 
-func (s *State) agreedSelection(labels map[string]bool) (catalog.Selection, error) {
-	if len(labels) == 1 {
-		for label := range labels {
-			sel, err := catalog.NewSelection(strings.Split(label, ","))
-			if err == nil {
-				return sel, nil
-			}
+// Services returns the services that have containers, in catalog order.
+func (s *State) Services() []string {
+	var out []string
+	for _, svc := range catalog.All() {
+		if _, ok := s.Containers[svc.Name]; ok {
+			out = append(out, svc.Name)
 		}
 	}
-	running := make([]string, 0, len(s.Containers))
-	for svc := range s.Containers {
-		running = append(running, svc)
-	}
-	sel, err := catalog.NewSelection(running)
+	return out
+}
+
+// Selection returns the services that have containers as a selection. It
+// fails for a stack without containers, and for one left with the console
+// alone.
+func (s *State) Selection() (catalog.Selection, error) {
+	sel, err := catalog.NewSelection(s.Services())
 	if err != nil {
-		return catalog.Selection{}, fmt.Errorf("stack %q: its containers are %s: %w",
-			s.Name, strings.Join(running, ", "), err)
+		return catalog.Selection{}, fmt.Errorf("stack %q: %w", s.Name, err)
 	}
-	s.Warnings = append(s.Warnings, fmt.Sprintf(
-		"stack %q's containers do not name one selection, as an interrupted up or down leaves them; taking the services that have containers: %s",
-		s.Name,
-		sel,
-	))
 	return sel, nil
 }
 
-func configsDisagree(name string, configs map[string][]string) error {
-	paths := make([]string, 0, len(configs))
-	for path := range configs {
+// Configs returns the config paths the stack's containers were created
+// from, sorted: one for a stack tule started, none for a stack without
+// containers.
+func (s *State) Configs() []string {
+	paths := make([]string, 0, len(s.configs))
+	for path := range s.configs {
 		paths = append(paths, path)
 	}
 	slices.Sort(paths)
+	return paths
+}
+
+// ConfigConflict reports containers created from more than one config file.
+// Removing the whole stack and its status still work; rendering it does
+// not.
+func (s *State) ConfigConflict() error {
+	if len(s.configs) < 2 {
+		return nil
+	}
+	paths := s.Configs()
 	parts := make([]string, 0, len(paths))
 	for _, path := range paths {
-		services := configs[path]
+		services := slices.Clone(s.configs[path])
 		slices.Sort(services)
 		parts = append(
 			parts,
@@ -141,9 +133,9 @@ func configsDisagree(name string, configs map[string][]string) error {
 	}
 	return fmt.Errorf(
 		"stack %q was started from more than one config file: %s; remove it with tule down --stack %s",
-		name,
+		s.Name,
 		strings.Join(parts, "; "),
-		name,
+		s.Name,
 	)
 }
 
@@ -155,45 +147,51 @@ func DescribeConfig(path string) string {
 	return path
 }
 
-// CheckConfig refuses to act on a running stack with a config file other
-// than the one it was started from.
+// CheckConfig refuses to render a running stack from a config file other
+// than the one it was started from, or one started from several.
 func (s *State) CheckConfig(path string) error {
-	if !s.Running() || s.ConfigPath == path {
+	if err := s.ConfigConflict(); err != nil {
+		return err
+	}
+	paths := s.Configs()
+	if len(paths) == 0 || paths[0] == path {
 		return nil
 	}
-	fix := "run tule where that file is found, or pass --config " + s.ConfigPath
-	if s.ConfigPath == "" {
+	started := paths[0]
+	fix := "run tule where that file is found, or pass --config " + started
+	if started == "" {
 		fix = "run tule where no tule.yaml is found"
 	}
 	return fmt.Errorf(
 		"stack %q was started from %s, and this run reads %s; %s, or pick another stack name with --stack",
 		s.Name,
-		DescribeConfig(s.ConfigPath),
+		DescribeConfig(started),
 		DescribeConfig(path),
 		fix,
 	)
 }
 
-// VolumeVersions maps the key of each of the stack's volumes to the version
-// recorded on it at creation.
-func (s *State) VolumeVersions() map[string]string {
-	out := map[string]string{}
+// VolumeNames returns the names of the stack's volumes for the catalog
+// volume keys given, such as queuesdata, that exist. A volume is the
+// stack's when compose made it for this project under that key: named
+// <stack>_<key> and labeled with the key. Other volumes in the project are
+// never named.
+func (s *State) VolumeNames(keys []string) []string {
+	var out []string
 	for _, v := range s.Volumes {
-		version, ok := v.Labels[render.LabelVersion]
-		if ok && v.Key() != "" {
-			out[v.Key()] = version
+		if slices.Contains(keys, v.Key()) && v.Name == s.Name+"_"+v.Key() {
+			out = append(out, v.Name)
 		}
 	}
 	return out
 }
 
-// VolumeNames returns the names of the stack's volumes whose keys are
-// keys.
-func (s *State) VolumeNames(keys []string) []string {
+// CatalogVolumeKeys returns the volume key of every catalog service.
+func CatalogVolumeKeys() []string {
 	var out []string
-	for _, v := range s.Volumes {
-		if slices.Contains(keys, v.Key()) {
-			out = append(out, v.Name)
+	for _, svc := range catalog.All() {
+		if svc.Volume != "" {
+			out = append(out, svc.Volume)
 		}
 	}
 	return out

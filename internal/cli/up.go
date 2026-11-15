@@ -21,7 +21,8 @@ var errFunctionsUnsupported = errors.New(
 )
 
 func newUpCommand(g *globals) *cobra.Command {
-	return &cobra.Command{
+	var skipPortCheck bool
+	cmd := &cobra.Command{
 		Use:   "up [service...]",
 		Short: "Start the stack, or add services to it",
 		Long: "Start the stack and wait until its services are healthy.\n\n" +
@@ -29,7 +30,9 @@ func newUpCommand(g *globals) *cobra.Command {
 			"services or the default set: every service but functions. On a running stack,\n" +
 			"add the services named to it, or, with none named, apply the configuration to\n" +
 			"the services it runs. Services whose wiring or version changes are listed, then\n" +
-			"recreated.",
+			"recreated.\n\n" +
+			"Every host port is checked free on this machine first; with a remote Docker\n" +
+			"daemon, whose ports this machine cannot see, pass --skip-port-check.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			rt, err := g.runtime(cmd)
 			if err != nil {
@@ -44,35 +47,70 @@ func newUpCommand(g *globals) *cobra.Command {
 				return err
 			}
 			if err = st.CheckConfig(cfg.Path); err != nil {
-				return err //nolint:wrapcheck // Names both config files.
+				return err //nolint:wrapcheck // Names the config files.
 			}
-			sel, err := upSelection(cfg, st, args)
+			sel, err := upSelection(cmd, cfg, st, args)
 			if err != nil {
 				return fmt.Errorf("up: %w", err)
 			}
-			if err := g.apply(cmd, rt, cfg, st, sel); err != nil {
+			if err := g.apply(cmd, rt, cfg, st, sel, !skipPortCheck); err != nil {
 				return err
 			}
 			return writeLine(cmd, fmt.Sprintf("stack %s is up: %s", g.stack, sel))
 		},
 	}
+	cmd.Flags().BoolVar(&skipPortCheck, "skip-port-check", false,
+		"do not check the host ports are free on this machine, for a remote Docker daemon")
+	return cmd
 }
 
 // upSelection is the services named, the configured ones or the default set
-// on a new stack, and on a running stack, its selection with the services
-// named added.
-func upSelection(cfg *config.Config, st *stack.State, names []string) (catalog.Selection, error) {
+// on a new stack, and on a running stack, its services with the services
+// named added. A running stack keeps its services over tule.yaml's
+// services:, with a warning when they differ.
+func upSelection(
+	cmd *cobra.Command,
+	cfg *config.Config,
+	st *stack.State,
+	names []string,
+) (catalog.Selection, error) {
 	if !st.Running() {
 		return cfg.Selection(names) //nolint:wrapcheck // Says what is wrong with the names.
 	}
-	if len(names) == 0 {
-		return st.Selection, nil
+	running, err := st.Selection()
+	if err != nil {
+		return catalog.Selection{}, err //nolint:wrapcheck // Says which stack.
 	}
-	sel, err := catalog.NewSelection(append(st.Selection.Names(), names...))
+	if len(names) == 0 {
+		if err = warnServicesIgnored(cmd, cfg, running); err != nil {
+			return catalog.Selection{}, err
+		}
+		return running, nil
+	}
+	sel, err := catalog.NewSelection(append(running.Names(), names...))
 	if err != nil {
 		return catalog.Selection{}, fmt.Errorf("select services: %w", err)
 	}
 	return sel, nil
+}
+
+// warnServicesIgnored warns when tule.yaml's services: differ from the
+// running stack's, which a bare up keeps.
+func warnServicesIgnored(cmd *cobra.Command, cfg *config.Config, running catalog.Selection) error {
+	if cfg.Services == nil {
+		return nil
+	}
+	configured, err := cfg.Selection(nil)
+	if err != nil {
+		return err //nolint:wrapcheck // Says what is wrong with services:.
+	}
+	if configured.String() == running.String() {
+		return nil
+	}
+	return warn(cmd, fmt.Sprintf(
+		"tule.yaml's services: (%s) differ from the running stack's (%s), which up keeps; "+
+			"add services with tule up <service...>, and remove them with tule down <service...>",
+		configured, running))
 }
 
 // apply renders the selection, prints what it changes in the stack, checks
@@ -83,15 +121,15 @@ func (g *globals) apply(
 	cfg *config.Config,
 	st *stack.State,
 	sel catalog.Selection,
+	checkPorts bool,
 ) error {
 	if sel.Has(catalog.Functions) {
 		return errFunctionsUnsupported
 	}
 	project, err := render.Render(render.Input{
-		Stack:          g.stack,
-		Config:         cfg,
-		Selection:      sel,
-		VolumeVersions: st.VolumeVersions(),
+		Stack:     g.stack,
+		Config:    cfg,
+		Selection: sel,
 	})
 	if err != nil {
 		return fmt.Errorf("render the stack: %w", err)
@@ -103,8 +141,10 @@ func (g *globals) apply(
 	if err := stack.NewPlan(st, project, bindings).Write(cmd.OutOrStdout()); err != nil {
 		return err //nolint:wrapcheck // Says what failed.
 	}
-	if err := stack.Preflight(cmd.Context(), bindings, st.Held); err != nil {
-		return err //nolint:wrapcheck // Names the ports and the keys that move them.
+	if checkPorts {
+		if err := stack.Preflight(cmd.Context(), bindings, st.Held); err != nil {
+			return err //nolint:wrapcheck // Names the ports and the keys that move them.
+		}
 	}
 	if err := rt.Up(cmd.Context(), project); err != nil {
 		return err //nolint:wrapcheck // The runtime says what failed.

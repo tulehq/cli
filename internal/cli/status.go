@@ -14,8 +14,9 @@ import (
 // statusJSON is `tule status --json`.
 type statusJSON struct {
 	Stack string `json:"stack"`
-	// Config is the tule.yaml the stack was started from; empty for none.
-	Config   string                `json:"config"`
+	// Configs are the tule.yaml files the stack's containers were started
+	// from, an empty path for none: one, unless they disagree.
+	Configs  []string              `json:"configs"`
 	Services []stack.ServiceStatus `json:"services"`
 }
 
@@ -25,7 +26,8 @@ func newStatusCommand(g *globals) *cobra.Command {
 		Use:   "status",
 		Short: "Show the stack's services: state, health, version, address and volume",
 		Long: "Show each service of the stack, read back from its containers, so it works from\n" +
-			"any directory. Exits non-zero when a selected service is not running and healthy.",
+			"any directory. Exits non-zero when the stack has no containers, or a service is\n" +
+			"not running and healthy.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			rt, err := g.runtime(cmd)
@@ -36,35 +38,44 @@ func newStatusCommand(g *globals) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if !st.Running() {
-				return fmt.Errorf("stack %q is not running; start it with tule up", g.stack)
+			if err = warnConfigConflict(cmd, st); err != nil {
+				return err
 			}
 			statuses := st.Status()
 			if asJSON {
 				err = writeStatusJSON(
 					cmd,
-					statusJSON{Stack: g.stack, Config: st.ConfigPath, Services: statuses},
+					statusJSON{Stack: g.stack, Configs: st.Configs(), Services: statuses},
 				)
-			} else {
+			} else if st.Running() {
 				err = writeStatusTable(cmd, statuses)
 			}
 			if err != nil {
 				return err
 			}
-			var unhealthy []string
-			for _, s := range statuses {
-				if s.Selected && !s.Healthy {
-					unhealthy = append(unhealthy, s.Name)
-				}
-			}
-			if len(unhealthy) > 0 {
-				return fmt.Errorf("not healthy: %s", strings.Join(unhealthy, ", "))
-			}
-			return nil
+			return statusError(g.stack, statuses)
 		},
 	}
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print JSON")
 	return cmd
+}
+
+// statusError fails a stack without containers, and one with a service that
+// is not running and healthy.
+func statusError(name string, statuses []stack.ServiceStatus) error {
+	if len(statuses) == 0 {
+		return fmt.Errorf("stack %q is not running; start it with tule up", name)
+	}
+	var unhealthy []string
+	for _, s := range statuses {
+		if !s.Healthy {
+			unhealthy = append(unhealthy, s.Name)
+		}
+	}
+	if len(unhealthy) > 0 {
+		return fmt.Errorf("not healthy: %s", strings.Join(unhealthy, ", "))
+	}
+	return nil
 }
 
 func writeStatusJSON(cmd *cobra.Command, s statusJSON) error {
@@ -83,9 +94,6 @@ func writeStatusTable(cmd *cobra.Command, statuses []stack.ServiceStatus) error 
 	}
 	for _, s := range statuses {
 		state := s.State
-		if !s.Selected {
-			state += " (not selected)"
-		}
 		if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
 			s.Name, state, dash(s.Health), dash(s.Version), dash(s.Address), dash(s.Volume),
 		); err != nil {

@@ -32,20 +32,16 @@ type Change struct {
 	Reasons []string
 }
 
-// VersionChange is a service that runs another version than before.
+// VersionChange is a running service whose version changes.
 type VersionChange struct {
 	Service string
 	From    string
 	To      string
-	// Data marks a From read from the service's volume, recorded when it
-	// was created, because the service has no container.
-	Data bool
 }
 
 // NewPlan compares the project p, published on bindings, with the stack s.
 func NewPlan(s *State, p *render.Project, bindings []Binding) Plan {
 	var plan Plan
-	volumeVersions := s.VolumeVersions()
 	for _, svc := range catalog.All() {
 		want, selected := p.Services[svc.Name]
 		have, running := s.Containers[svc.Name]
@@ -53,23 +49,12 @@ func NewPlan(s *State, p *render.Project, bindings []Binding) Plan {
 		case !selected && running:
 			plan.Remove = append(plan.Remove, svc.Name)
 		case selected && !running:
-			plan.add(svc, want, volumeVersions)
+			plan.Add = append(plan.Add, svc.Name)
 		case selected && running:
 			plan.compare(svc.Name, have, want, bindings)
 		}
 	}
 	return plan
-}
-
-// add adds a service that has no container, and the version change from
-// its volume's when it has one.
-func (p *Plan) add(svc *catalog.Service, want render.Service, volumeVersions map[string]string) {
-	p.Add = append(p.Add, svc.Name)
-	from, ok := volumeVersions[svc.Volume]
-	if to := imageTag(unescape(want.Image)); ok && from != to {
-		p.Versions = append(p.Versions,
-			VersionChange{Service: svc.Name, From: from, To: to, Data: true})
-	}
 }
 
 // compare adds what changes in a running service.
@@ -169,11 +154,6 @@ func (p Plan) Write(w io.Writer) error {
 	if len(p.Versions) > 0 {
 		b.WriteString("Version changes:\n")
 		for _, v := range p.Versions {
-			if v.Data {
-				fmt.Fprintf(&b, "  %s %s -> %s (the version its volume was created with)\n",
-					v.Service, v.From, v.To)
-				continue
-			}
 			fmt.Fprintf(&b, "  %s %s -> %s\n", v.Service, v.From, v.To)
 		}
 	}

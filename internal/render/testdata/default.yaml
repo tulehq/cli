@@ -12,7 +12,6 @@ services:
       - accountsdata:/data
     labels:
       dev.tule.config: ""
-      dev.tule.selection: identity,accounts,object-store,secret-store,mailbox,queues,console
       dev.tule.service: accounts
       dev.tule.stack: tule
   console:
@@ -41,7 +40,6 @@ services:
       - 127.0.0.1:9070:9070
     labels:
       dev.tule.config: ""
-      dev.tule.selection: identity,accounts,object-store,secret-store,mailbox,queues,console
       dev.tule.service: console
       dev.tule.stack: tule
   identity:
@@ -56,7 +54,6 @@ services:
       - identitydata:/data
     labels:
       dev.tule.config: ""
-      dev.tule.selection: identity,accounts,object-store,secret-store,mailbox,queues,console
       dev.tule.service: identity
       dev.tule.stack: tule
   mailbox:
@@ -71,7 +68,6 @@ services:
       - maildata:/data
     labels:
       dev.tule.config: ""
-      dev.tule.selection: identity,accounts,object-store,secret-store,mailbox,queues,console
       dev.tule.service: mailbox
       dev.tule.stack: tule
   object-store:
@@ -87,7 +83,6 @@ services:
       - objectdata:/data
     labels:
       dev.tule.config: ""
-      dev.tule.selection: identity,accounts,object-store,secret-store,mailbox,queues,console
       dev.tule.service: object-store
       dev.tule.stack: tule
   queues:
@@ -103,7 +98,6 @@ services:
       - queuesdata:/data
     labels:
       dev.tule.config: ""
-      dev.tule.selection: identity,accounts,object-store,secret-store,mailbox,queues,console
       dev.tule.service: queues
       dev.tule.stack: tule
   secret-store:
@@ -118,25 +112,12 @@ services:
       - secretdata:/data
     labels:
       dev.tule.config: ""
-      dev.tule.selection: identity,accounts,object-store,secret-store,mailbox,queues,console
       dev.tule.service: secret-store
       dev.tule.stack: tule
 volumes:
-  accountsdata:
-    labels:
-      dev.tule.version: 0.5.1
-  identitydata:
-    labels:
-      dev.tule.version: 0.5.2
-  maildata:
-    labels:
-      dev.tule.version: 0.4.1
-  objectdata:
-    labels:
-      dev.tule.version: 0.13.1
-  queuesdata:
-    labels:
-      dev.tule.version: 0.6.1
-  secretdata:
-    labels:
-      dev.tule.version: 0.6.1
+  accountsdata: {}
+  identitydata: {}
+  maildata: {}
+  objectdata: {}
+  queuesdata: {}
+  secretdata: {}

@@ -1,6 +1,9 @@
 package runtime
 
 import (
+	"errors"
+	"io/fs"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -121,13 +124,33 @@ func TestCheckComposeVersion(t *testing.T) {
 
 func TestComposeArgs(t *testing.T) {
 	p := &render.Project{Name: "dev"}
-	got := composeArgs(p, "up", "--detach")
-	want := []string{"compose", "--project-name", "dev", "--file", "-", "up", "--detach"}
+	got := composeArgs(p, "/tmp/x/empty.env", "up", "--detach")
+	want := []string{
+		"compose", "--project-name", "dev", "--file", "-", "--env-file", "/tmp/x/empty.env",
+		"up", "--detach",
+	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("composeArgs() = %v, want %v", got, want)
 	}
 	logs := logsArgs(LogsOptions{Follow: true, Since: "10m", Services: []string{"queues"}})
 	if !reflect.DeepEqual(logs, []string{"logs", "--follow", "--since", "10m", "queues"}) {
 		t.Errorf("logsArgs() = %v", logs)
+	}
+}
+
+func TestEmptyEnvFile(t *testing.T) {
+	path, cleanup, err := emptyEnvFile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path) //nolint:gosec // The file the test just made.
+	if err != nil || len(data) != 0 {
+		t.Errorf("env file = %q, %v; want empty", data, err)
+	}
+	if err := cleanup(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("env file left after cleanup: %v", err)
 	}
 }

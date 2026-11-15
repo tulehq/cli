@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -135,14 +136,14 @@ func (s *stackDir) status() map[string]stack.ServiceStatus {
 	}
 	var parsed struct {
 		Stack    string                `json:"stack"`
-		Config   string                `json:"config"`
+		Configs  []string              `json:"configs"`
 		Services []stack.ServiceStatus `json:"services"`
 	}
 	if err := json.Unmarshal(out, &parsed); err != nil {
 		s.t.Fatalf("parse tule status: %v\n%s", err, out)
 	}
-	if parsed.Config != s.configPath() {
-		s.t.Errorf("status config = %q, want %q", parsed.Config, s.configPath())
+	if !slices.Equal(parsed.Configs, []string{s.configPath()}) {
+		s.t.Errorf("status configs = %q, want %q", parsed.Configs, s.configPath())
 	}
 	byName := map[string]stack.ServiceStatus{}
 	for _, svc := range parsed.Services {

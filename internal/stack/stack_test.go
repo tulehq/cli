@@ -1,6 +1,7 @@
 package stack_test
 
 import (
+	"errors"
 	"net"
 	"reflect"
 	"strconv"
@@ -56,22 +57,30 @@ func state(t *testing.T, p *render.Project) *stack.State {
 func TestReadBack(t *testing.T) {
 	cfg := parse(t, "")
 	cfg.Path = "/work/tule.yaml"
-	st := state(t, project(t, cfg, catalog.ObjectStore, catalog.Queues))
+	p := project(t, cfg, catalog.ObjectStore, catalog.Queues)
+	foreign := runtime.Volume{Name: "tule_pgdata", Labels: map[string]string{
+		runtime.LabelProject: "tule", runtime.LabelVolume: "pgdata",
+	}}
+	st, err := stack.FromContainers(
+		"tule",
+		stacktest.Containers(p),
+		append(stacktest.Volumes(p), foreign),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !st.Running() {
 		t.Fatal("Running() = false")
 	}
-	if st.ConfigPath != "/work/tule.yaml" {
-		t.Errorf("ConfigPath = %q", st.ConfigPath)
+	if got := st.Configs(); !reflect.DeepEqual(got, []string{"/work/tule.yaml"}) {
+		t.Errorf("Configs() = %v", got)
 	}
-	if got := st.Selection.String(); got != "object-store,queues" {
-		t.Errorf("Selection = %s", got)
+	sel, err := st.Selection()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if len(st.Warnings) != 0 {
-		t.Errorf("Warnings = %v", st.Warnings)
-	}
-	queues := stacktest.Lookup(catalog.Queues)
-	if got := st.VolumeVersions()["queuesdata"]; got != queues.Version {
-		t.Errorf("queuesdata version = %q, want %q", got, queues.Version)
+	if got := sel.String(); got != "object-store,queues" {
+		t.Errorf("Selection() = %s", got)
 	}
 	if got := st.VolumeNames(
 		[]string{"queuesdata"},
@@ -81,8 +90,9 @@ func TestReadBack(t *testing.T) {
 	) {
 		t.Errorf("VolumeNames() = %v", got)
 	}
-	if got := st.VolumeNames(nil); got != nil {
-		t.Errorf("VolumeNames(nil) = %v, want none", got)
+	got := st.VolumeNames(stack.CatalogVolumeKeys())
+	if want := []string{"tule_objectdata", "tule_queuesdata"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("VolumeNames(catalog) = %v, want %v and not the foreign tule_pgdata", got, want)
 	}
 }
 
@@ -96,6 +106,25 @@ func TestReadBackEmpty(t *testing.T) {
 	}
 	if err := st.CheckConfig("/anywhere/tule.yaml"); err != nil {
 		t.Errorf("CheckConfig() on a new stack = %v", err)
+	}
+	if _, err := st.Selection(); err == nil {
+		t.Error("Selection() of a stack without containers did not fail")
+	}
+}
+
+func TestReadBackConsoleAlone(t *testing.T) {
+	// What an interrupted down can leave.
+	containers := stacktest.Containers(project(t, parse(t, ""), catalog.Queues, catalog.Console))
+	st, err := stack.FromContainers("tule", containers[:1], nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = st.Selection()
+	if !errors.Is(err, catalog.ErrConsoleAlone) {
+		t.Errorf("Selection() = %v, want %v", err, catalog.ErrConsoleAlone)
+	}
+	if got := st.Status(); len(got) != 1 || got[0].Name != catalog.Console {
+		t.Errorf("Status() = %+v", got)
 	}
 }
 
@@ -111,37 +140,31 @@ func TestReadBackRefusesAForeignContainer(t *testing.T) {
 	}
 }
 
-func TestReadBackRefusesTwoConfigs(t *testing.T) {
+func TestReadBackTwoConfigs(t *testing.T) {
 	a := parse(t, "")
 	a.Path = "/a/tule.yaml"
 	b := parse(t, "")
 	containers := append(
 		stacktest.Containers(project(t, a, catalog.Queues)),
 		stacktest.Containers(project(t, b, catalog.ObjectStore))...)
-	_, err := stack.FromContainers("tule", containers, nil)
-	if err == nil ||
-		!strings.Contains(err.Error(), "queues from /a/tule.yaml") ||
-		!strings.Contains(err.Error(), "object-store from no tule.yaml") {
-		t.Errorf("FromContainers() = %v", err)
-	}
-}
-
-func TestReadBackSelectionsDisagree(t *testing.T) {
-	cfg := parse(t, "")
-	// An interrupted down: object-store recreated without queues, which is
-	// still there from the earlier selection.
-	containers := append(
-		stacktest.Containers(project(t, cfg, catalog.ObjectStore, catalog.Identity)),
-		stacktest.Containers(project(t, cfg, catalog.Queues, catalog.ObjectStore))[1])
 	st, err := stack.FromContainers("tule", containers, nil)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("FromContainers() = %v, want the state, so the stack can be removed", err)
 	}
-	if got := st.Selection.String(); got != "identity,object-store,queues" {
-		t.Errorf("Selection = %s, want the services with containers", got)
+	if got := st.Configs(); !reflect.DeepEqual(got, []string{"", "/a/tule.yaml"}) {
+		t.Errorf("Configs() = %v", got)
 	}
-	if len(st.Warnings) != 1 || !strings.Contains(st.Warnings[0], "do not name one selection") {
-		t.Errorf("Warnings = %v", st.Warnings)
+	conflict := st.ConfigConflict()
+	if conflict == nil ||
+		!strings.Contains(conflict.Error(), "queues from /a/tule.yaml") ||
+		!strings.Contains(conflict.Error(), "object-store from no tule.yaml") ||
+		!strings.Contains(conflict.Error(), "tule down --stack tule") {
+		t.Errorf("ConfigConflict() = %v", conflict)
+	}
+	for _, path := range []string{"", "/a/tule.yaml"} {
+		if err := st.CheckConfig(path); err == nil || err.Error() != conflict.Error() {
+			t.Errorf("CheckConfig(%q) = %v, want the conflict", path, err)
+		}
 	}
 }
 
@@ -149,6 +172,9 @@ func TestCheckConfig(t *testing.T) {
 	cfg := parse(t, "")
 	cfg.Path = "/a/tule.yaml"
 	st := state(t, project(t, cfg, catalog.Queues))
+	if err := st.ConfigConflict(); err != nil {
+		t.Errorf("ConfigConflict() = %v", err)
+	}
 	if err := st.CheckConfig("/a/tule.yaml"); err != nil {
 		t.Errorf("CheckConfig(same) = %v", err)
 	}
@@ -275,25 +301,6 @@ func TestPlanVersionsAndPorts(t *testing.T) {
 	}
 }
 
-func TestPlanVersionFromAVolume(t *testing.T) {
-	old := parse(t, "versions: {queues: 0.1.0}")
-	// After a down without --volumes: no containers, the volume is kept.
-	volumes := stacktest.Volumes(project(t, old, catalog.Queues))
-	st, err := stack.FromContainers("tule", nil, volumes)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg := parse(t, "")
-	plan := stack.NewPlan(st, project(t, cfg, catalog.Queues), bindings(t, cfg, catalog.Queues))
-	queues := stacktest.Lookup(catalog.Queues)
-	want := []stack.VersionChange{
-		{Service: catalog.Queues, From: "0.1.0", To: queues.Version, Data: true},
-	}
-	if !reflect.DeepEqual(plan.Versions, want) {
-		t.Errorf("Versions = %+v, want %+v", plan.Versions, want)
-	}
-}
-
 // listen holds a free port on 127.0.0.1 until the test ends.
 func listen(t *testing.T) int {
 	t.Helper()
@@ -386,14 +393,12 @@ func TestBindingsFollowPortOffset(t *testing.T) {
 
 func TestStatus(t *testing.T) {
 	cfg := parse(t, "")
-	containers := stacktest.Containers(
-		project(t, cfg, catalog.ObjectStore, catalog.Queues, catalog.Console),
-	)
-	// In name order: console, object-store, queues. console has no health
-	// check, queues is unhealthy, and object-store's container is gone.
+	containers := stacktest.Containers(project(t, cfg, catalog.Queues, catalog.Console))
+	// In name order: console, queues. console has no health check, and
+	// queues is unhealthy.
 	containers[0].Health = ""
-	containers[2].Health = "unhealthy"
-	st, err := stack.FromContainers("tule", []runtime.Container{containers[0], containers[2]}, nil)
+	containers[1].Health = "unhealthy"
+	st, err := stack.FromContainers("tule", containers, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -401,13 +406,12 @@ func TestStatus(t *testing.T) {
 	console := stacktest.Lookup(catalog.Console)
 	queues := stacktest.Lookup(catalog.Queues)
 	want := []stack.ServiceStatus{
-		{Name: catalog.ObjectStore, Selected: true, State: stack.StateMissing},
 		{
-			Name: catalog.Queues, Selected: true, State: "running", Health: "unhealthy",
+			Name: catalog.Queues, State: "running", Health: "unhealthy",
 			Version: queues.Version, Address: "127.0.0.1:9050", Volume: "tule_queuesdata",
 		},
 		{
-			Name: catalog.Console, Selected: true, State: "running", Healthy: true,
+			Name: catalog.Console, State: "running", Healthy: true,
 			Version: console.Version, Address: "127.0.0.1:9070",
 		},
 	}

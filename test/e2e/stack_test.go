@@ -3,6 +3,8 @@
 package e2e
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -28,6 +30,12 @@ const offset = 100
 // and down --volumes. The steps build on each other.
 func TestStacks(t *testing.T) {
 	a := newStack(t, "e2ea", "")
+	// compose must not read a .env where tule runs: this one would keep
+	// down queues from removing queues, and fail to parse.
+	if err := os.WriteFile(filepath.Join(a.dir, ".env"),
+		[]byte("COMPOSE_IGNORE_ORPHANS=true\nthis line is not a variable\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	b := newStack(t, "e2eb", "portOffset: "+strconv.Itoa(offset)+"\n")
 
 	out := a.must("up")
@@ -35,7 +43,7 @@ func TestStacks(t *testing.T) {
 		t.Fatalf("up output does not end with the selection:\n%s", out)
 	}
 	checkStatus(t, a, catalog.DefaultSelection().Names(), 0)
-	checkLabels(t, a, catalog.DefaultSelection().String())
+	checkLabels(t, a)
 
 	exerciseAll(t, a.awsConfig())
 
@@ -76,13 +84,12 @@ func checkStatus(t *testing.T, s *stackDir, names []string, offset int) {
 			continue
 		}
 		want := stack.ServiceStatus{
-			Name:     name,
-			State:    stack.StateRunning,
-			Health:   got.Health, // Empty for an image without a health check.
-			Version:  svc.Version,
-			Address:  "127.0.0.1:" + strconv.Itoa(svc.Ports[0].Default+offset),
-			Selected: true,
-			Healthy:  true,
+			Name:    name,
+			State:   stack.StateRunning,
+			Health:  got.Health, // Empty for an image without a health check.
+			Version: svc.Version,
+			Address: "127.0.0.1:" + strconv.Itoa(svc.Ports[0].Default+offset),
+			Healthy: true,
 		}
 		if svc.Volume != "" {
 			want.Volume = s.name + "_" + svc.Volume
@@ -93,9 +100,11 @@ func checkStatus(t *testing.T, s *stackDir, names []string, offset int) {
 	}
 }
 
-// checkLabels checks the state tule reads back is on the containers, and
-// the version on the volumes.
-func checkLabels(t *testing.T, s *stackDir, selection string) {
+// checkLabels checks the config path tule reads back is on the containers,
+// and that neither containers nor volumes carry a label that would change
+// with the selection or a version: compose recreates a container, and asks
+// to recreate a volume, when its labels change.
+func checkLabels(t *testing.T, s *stackDir) {
 	t.Helper()
 	container := s.name + "-" + catalog.Queues + "-1"
 	if got := docker(t, "container", "inspect", "--format",
@@ -103,23 +112,55 @@ func checkLabels(t *testing.T, s *stackDir, selection string) {
 		t.Errorf("dev.tule.config = %q, want %q", got, s.configPath())
 	}
 	if got := docker(t, "container", "inspect", "--format",
-		`{{index .Config.Labels "dev.tule.selection"}}`, container); got != selection {
-		t.Errorf("dev.tule.selection = %q, want %q", got, selection)
+		`{{json .Config.Labels}}`, container); strings.Contains(got, "dev.tule.selection") {
+		t.Errorf("container labels = %s, want no dev.tule.selection", got)
 	}
 	objectStore, err := catalog.Lookup(catalog.ObjectStore)
 	if err != nil {
 		t.Fatal(err)
 	}
+	volume := s.name + "_" + objectStore.Volume
 	if got := docker(
 		t,
 		"volume",
 		"inspect",
 		"--format",
-		`{{index .Labels "dev.tule.version"}}`,
-		s.name+"_"+objectStore.Volume,
-	); got != objectStore.Version {
-		t.Errorf("dev.tule.version = %q, want %q", got, objectStore.Version)
+		`{{json .Labels}}`,
+		volume,
+	); strings.Contains(
+		got,
+		"dev.tule.",
+	) {
+		t.Errorf("volume %s labels = %s, want no tule labels", volume, got)
 	}
+}
+
+// containerIDs maps each service of the stack to its container ID.
+func containerIDs(t *testing.T, name string) map[string]string {
+	t.Helper()
+	out := docker(t, "ps", "--all", "--no-trunc",
+		"--filter", "label=com.docker.compose.project="+name,
+		"--format", `{{.Label "dev.tule.service"}} {{.ID}}`)
+	ids := map[string]string{}
+	for line := range strings.Lines(out) {
+		svc, id, _ := strings.Cut(strings.TrimSpace(line), " ")
+		ids[svc] = id
+	}
+	return ids
+}
+
+// recreated returns the services in both maps whose container changed, in
+// catalog order.
+func recreated(before, after map[string]string) []string {
+	var out []string
+	for _, name := range catalog.Names() {
+		b, inBefore := before[name]
+		a, inAfter := after[name]
+		if inBefore && inAfter && a != b {
+			out = append(out, name)
+		}
+	}
+	return out
 }
 
 // exerciseAll makes a cheap call or two against each service the default
@@ -272,7 +313,13 @@ func checkDownQueues(t *testing.T, a *stackDir) {
 	if _, ok := containerEnv(t, objectStore)["TULE_Storage_QueuesEndpoint"]; !ok {
 		t.Fatal("object-store has no queues endpoint before down queues")
 	}
+	before := containerIDs(t, a.name)
 	out := a.must("down", catalog.Queues)
+	after := containerIDs(t, a.name)
+	checkRecreated(t, "down queues", out, before, after)
+	if _, ok := after[catalog.Queues]; ok {
+		t.Error("queues' container is still there after down queues")
+	}
 	recreate := strings.Index(out, "object-store: TULE_Storage_QueuesEndpoint removed")
 	remove := strings.Index(out, "Removing: queues")
 	if recreate < 0 || remove < recreate {
@@ -300,7 +347,9 @@ func checkDownQueues(t *testing.T, a *stackDir) {
 		t.Errorf("queues' volume is gone after down without --volumes: %q", got)
 	}
 
+	before = containerIDs(t, a.name)
 	out = a.must("up", catalog.Queues)
+	checkRecreated(t, "up queues", out, before, containerIDs(t, a.name))
 	if !strings.Contains(out, "object-store: TULE_Storage_QueuesEndpoint added") {
 		t.Errorf("up queues does not list object-store's recreate:\n%s", out)
 	}
@@ -311,4 +360,38 @@ func checkDownQueues(t *testing.T, a *stackDir) {
 		t.Errorf("SQS GetQueueUrl after queues came back: %v", err)
 	}
 	checkStatus(t, a, catalog.DefaultSelection().Names(), 0)
+}
+
+// wantRecreated is what adding or removing queues recreates in the default
+// set: the services wired to it.
+var wantRecreated = []string{catalog.ObjectStore, catalog.Console}
+
+// checkRecreated checks the services whose containers changed are exactly
+// the ones the plan in out listed as recreated, and those wired to queues.
+func checkRecreated(t *testing.T, step, out string, before, after map[string]string) {
+	t.Helper()
+	got := recreated(before, after)
+	listed := planRecreated(out)
+	if !slices.Equal(got, listed) || !slices.Equal(got, wantRecreated) {
+		t.Errorf("%s recreated %v, and its plan listed %v; want both %v",
+			step, got, listed, wantRecreated)
+	}
+}
+
+// planRecreated returns the services under the plan's "Recreating" heading.
+func planRecreated(out string) []string {
+	var names []string
+	in := false
+	for line := range strings.Lines(out) {
+		switch {
+		case strings.HasPrefix(line, "Recreating"):
+			in = true
+		case in && strings.HasPrefix(line, "  "):
+			name, _, _ := strings.Cut(strings.TrimSpace(line), ":")
+			names = append(names, name)
+		default:
+			in = false
+		}
+	}
+	return names
 }

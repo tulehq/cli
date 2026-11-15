@@ -23,7 +23,6 @@ services:
       - "989"
     labels:
       dev.tule.config: ""
-      dev.tule.selection: identity,queues,functions
       dev.tule.service: functions
       dev.tule.stack: second
   identity:
@@ -37,7 +36,6 @@ services:
       - identitydata:/data
     labels:
       dev.tule.config: ""
-      dev.tule.selection: identity,queues,functions
       dev.tule.service: identity
       dev.tule.stack: second
   queues:
@@ -53,16 +51,9 @@ services:
       - queuesdata:/data
     labels:
       dev.tule.config: ""
-      dev.tule.selection: identity,queues,functions
       dev.tule.service: queues
       dev.tule.stack: second
 volumes:
-  functionsdata:
-    labels:
-      dev.tule.version: 0.6.1
-  identitydata:
-    labels:
-      dev.tule.version: 0.5.2
-  queuesdata:
-    labels:
-      dev.tule.version: 0.6.1
+  functionsdata: {}
+  identitydata: {}
+  queuesdata: {}

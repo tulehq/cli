@@ -11,10 +11,7 @@ services:
       - objectdata:/data
     labels:
       dev.tule.config: ""
-      dev.tule.selection: object-store
       dev.tule.service: object-store
       dev.tule.stack: tule
 volumes:
-  objectdata:
-    labels:
-      dev.tule.version: 0.13.1
+  objectdata: {}

@@ -63,9 +63,6 @@ func Volumes(p *render.Project) []runtime.Volume {
 	out := make([]runtime.Volume, 0, len(p.Volumes))
 	for _, key := range slices.Sorted(maps.Keys(p.Volumes)) {
 		labels := map[string]string{runtime.LabelProject: p.Name, runtime.LabelVolume: key}
-		for k, v := range p.Volumes[key].Labels {
-			labels[k] = unescape(v)
-		}
 		out = append(out, runtime.Volume{Name: p.Name + "_" + key, Labels: labels})
 	}
 	return out

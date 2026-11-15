@@ -73,8 +73,8 @@ func (g *globals) loadConfig(cmd *cobra.Command) (*config.Config, error) {
 		return nil, fmt.Errorf("config: %w", err)
 	}
 	for _, w := range warnings {
-		if _, err := fmt.Fprintln(cmd.ErrOrStderr(), "warning: "+w); err != nil {
-			return nil, fmt.Errorf("print a warning: %w", err)
+		if err := warn(cmd, w); err != nil {
+			return nil, err
 		}
 	}
 	return cfg, nil
@@ -89,17 +89,28 @@ func (g *globals) runtime(cmd *cobra.Command) (runtime.Runtime, error) {
 	return rt, nil
 }
 
-// readState reads the stack back from its containers and prints the
-// state's warnings.
+// readState reads the stack back from its containers.
 func (g *globals) readState(cmd *cobra.Command, rt runtime.Runtime) (*stack.State, error) {
 	st, err := stack.Read(cmd.Context(), rt, g.stack)
 	if err != nil {
 		return nil, err //nolint:wrapcheck // Says which stack and what failed.
 	}
-	for _, w := range st.Warnings {
-		if _, err := fmt.Fprintln(cmd.ErrOrStderr(), "warning: "+w); err != nil {
-			return nil, fmt.Errorf("print a warning: %w", err)
-		}
-	}
 	return st, nil
+}
+
+// warnConfigConflict warns of a stack whose containers were created from
+// more than one config file, for the commands that work on it anyway.
+func warnConfigConflict(cmd *cobra.Command, st *stack.State) error {
+	if err := st.ConfigConflict(); err != nil {
+		return warn(cmd, err.Error())
+	}
+	return nil
+}
+
+// warn prints a warning to standard error.
+func warn(cmd *cobra.Command, msg string) error {
+	if _, err := fmt.Fprintln(cmd.ErrOrStderr(), "warning: "+msg); err != nil {
+		return fmt.Errorf("print a warning: %w", err)
+	}
+	return nil
 }
