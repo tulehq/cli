@@ -1,7 +1,7 @@
 name: second
 services:
   functions:
-    image: ghcr.io/tulehq/functions:0.6.1
+    image: ghcr.io/tulehq/functions:0.7.0
     depends_on:
       queues:
         condition: service_healthy
