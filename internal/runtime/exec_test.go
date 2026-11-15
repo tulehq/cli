@@ -9,7 +9,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -133,6 +135,84 @@ while :; do sleep 0.05; done'
 		t.Fatal("Up() did not return after an interrupt")
 	}
 	waitForLine(t, log, "plugin-interrupted")
+}
+
+// startInterruptible runs Up on a fake docker and waits until script logs
+// "started", and returns Up's result and the cancel standing in for the
+// first signal.
+func startInterruptible(
+	t *testing.T,
+	script string,
+) (log string, done <-chan error, cancel func()) {
+	t.Helper()
+	log = fakeDocker(t, script)
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	result := make(chan error, 1)
+	go func() {
+		result <- NewCompose(io.Discard).Up(ctx, &render.Project{Name: "tule"})
+	}()
+	waitForLine(t, log, "started")
+	return log, result, cancel
+}
+
+// TestInterruptWakesAStoppedPlugin stops the plugin, as the terminal does
+// one that writes to it under stty tostop: the interrupt must still reach it.
+func TestInterruptWakesAStoppedPlugin(t *testing.T) {
+	log, done, cancel := startInterruptible(t, `
+export LOG
+sh -c 'trap "echo plugin-interrupted >> \"\$LOG\"; exit 130" INT
+echo started >> "$LOG"
+kill -STOP $$
+while :; do sleep 0.05; done'
+`)
+	cancel()
+	waitForLine(t, log, "plugin-interrupted")
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("Up() = nil after an interrupt")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Up() did not return after the interrupt")
+	}
+}
+
+// TestKillAllKillsThePlugin interrupts a plugin that ignores interrupts,
+// then kills it as a second signal does, without waiting out the grace.
+func TestKillAllKillsThePlugin(t *testing.T) {
+	log, done, cancel := startInterruptible(t, `
+export LOG
+sh -c 'trap "" INT
+echo "pid $$" >> "$LOG"
+echo started >> "$LOG"
+while :; do sleep 0.05; done'
+`)
+	cancel()
+	time.Sleep(200 * time.Millisecond) // The plugin ignores the interrupt.
+	if err := KillAll(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("Up() = nil after KillAll")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Up() did not return after KillAll")
+	}
+	var pid int
+	for line := range strings.Lines(readLog(t, log)) {
+		if p, ok := strings.CutPrefix(strings.TrimSpace(line), "pid "); ok {
+			pid, _ = strconv.Atoi(p)
+		}
+	}
+	if pid == 0 {
+		t.Fatal("the plugin logged no pid")
+	}
+	if err := syscall.Kill(pid, 0); !errors.Is(err, syscall.ESRCH) {
+		t.Errorf("the plugin is still there after KillAll: %v", err)
+	}
 }
 
 func TestSocketGroup(t *testing.T) {

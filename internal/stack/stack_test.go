@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -449,5 +450,36 @@ func TestPlanRefusesADowngrade(t *testing.T) {
 	if err := stack.NewPlan(st, project(t, parse(t, ""), catalog.Queues),
 		bindings(t, parse(t, ""), catalog.Queues)).CheckDowngrades(); err != nil {
 		t.Errorf("CheckDowngrades() with no version change = %v", err)
+	}
+}
+
+func TestPlanComparesTheSocketGroupOnlyWhenKnown(t *testing.T) {
+	cfg := parse(t, "")
+	render0 := func(gid string) *render.Project {
+		p, err := render.Render(render.Input{
+			Stack: "tule", Config: cfg, Selection: selection(t, catalog.Functions),
+			Docker: render.Docker{SocketPath: "/var/run/docker.sock", GroupID: gid},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	b := bindings(t, cfg, catalog.Functions)
+	containers := stacktest.Containers(render0("989"))
+	st := func() *stack.State {
+		s, err := stack.FromContainers("tule", containers, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	if plan := stack.NewPlan(st(), render0("1001"), b); len(plan.Recreate) != 1 ||
+		!slices.Equal(plan.Recreate[0].Reasons, []string{"Docker socket group changed"}) {
+		t.Errorf("a known group change: plan = %+v", plan)
+	}
+	containers[0].GroupAdd = nil // Not the one group tule gives functions.
+	if plan := stack.NewPlan(st(), render0("0"), b); len(plan.Recreate) != 0 {
+		t.Errorf("an unknown group: plan = %+v, want no change listed", plan)
 	}
 }

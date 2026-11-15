@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -164,7 +165,7 @@ func (c *Compose) composeTo(
 	cmd.Stdin = bytes.NewReader(data)
 	cmd.Stdout = stdout
 	cmd.Stderr = c.Out
-	runErr := cmd.Run()
+	runErr := run(cmd)
 	if d := deadline.Load(); d != 0 {
 		// Interrupted: the plugin may still be exiting after docker.
 		if err := endGroup(cmd, time.Unix(0, d)); err != nil {
@@ -175,6 +176,44 @@ func (c *Compose) composeTo(
 		return fmt.Errorf("docker compose %s: %w", verb[0], runErr)
 	}
 	return nil
+}
+
+// running holds the compose commands under way, for KillAll.
+var running = struct {
+	cmds map[*exec.Cmd]struct{}
+	sync.Mutex
+}{cmds: map[*exec.Cmd]struct{}{}}
+
+// run starts cmd, keeps it in running until it exits, and waits for it.
+func run(cmd *exec.Cmd) error {
+	running.Lock()
+	err := cmd.Start()
+	if err == nil {
+		running.cmds[cmd] = struct{}{}
+	}
+	running.Unlock()
+	if err != nil {
+		return err //nolint:wrapcheck // The caller says which compose verb.
+	}
+	defer func() {
+		running.Lock()
+		delete(running.cmds, cmd)
+		running.Unlock()
+	}()
+	return cmd.Wait() //nolint:wrapcheck // The caller says which compose verb.
+}
+
+// KillAll kills every compose command under way at once, the compose
+// plugin with it on Unix, for a second interrupt that will not wait out
+// the grace an interrupted compose gets.
+func KillAll() error {
+	running.Lock()
+	defer running.Unlock()
+	errs := make([]error, 0, len(running.cmds))
+	for cmd := range running.cmds {
+		errs = append(errs, killGroup(cmd))
+	}
+	return errors.Join(errs...)
 }
 
 // emptyEnvFile makes an empty file to pass compose as --env-file, and

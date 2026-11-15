@@ -115,7 +115,7 @@ func (p *Plan) compare(
 	if portsChanged(have, bindings, name) {
 		reasons = append(reasons, "host ports changed")
 	}
-	if !slices.Equal(have.GroupAdd, unescapeAll(want.GroupAdd)) {
+	if groupChanged(have.GroupAdd, unescapeAll(want.GroupAdd)) {
 		reasons = append(reasons, "Docker socket group changed")
 	}
 	if len(reasons) > 0 {
@@ -152,6 +152,13 @@ func envChanges(have runtime.Container, rendered map[string]string) []string {
 		out = append(out, k+" removed")
 	}
 	return out
+}
+
+// groupChanged reports whether the socket's group changes. It is known on
+// both sides only when each has the one group tule gives functions; the
+// render holds a stand-in until the group is probed.
+func groupChanged(have, want []string) bool {
+	return len(have) == 1 && len(want) == 1 && have[0] != want[0]
 }
 
 // portsChanged reports whether a container's published ports differ from

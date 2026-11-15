@@ -20,10 +20,24 @@ func startInGroup(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 }
 
-// interruptGroup sends SIGINT to cmd's process group.
+// interruptGroup sends SIGINT to cmd's process group, then SIGCONT, so a
+// group stopped for writing to the terminal (stty tostop) wakes to handle
+// it.
 func interruptGroup(cmd *exec.Cmd) error {
 	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGINT); err != nil {
 		return fmt.Errorf("interrupt docker compose: %w", err)
+	}
+	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGCONT); err != nil {
+		return fmt.Errorf("continue docker compose: %w", err)
+	}
+	return nil
+}
+
+// killGroup kills cmd's process group at once.
+func killGroup(cmd *exec.Cmd) error {
+	err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	if err != nil && !errors.Is(err, syscall.ESRCH) {
+		return fmt.Errorf("kill docker compose: %w", err)
 	}
 	return nil
 }
@@ -41,8 +55,5 @@ func endGroup(cmd *exec.Cmd, deadline time.Time) error {
 		}
 		time.Sleep(groupPoll)
 	}
-	if err := syscall.Kill(pgid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
-		return fmt.Errorf("kill docker compose: %w", err)
-	}
-	return nil
+	return killGroup(cmd)
 }

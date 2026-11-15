@@ -3,6 +3,7 @@
 package runtime
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -19,6 +20,14 @@ func startInGroup(*exec.Cmd) {}
 func interruptGroup(cmd *exec.Cmd) error {
 	if err := cmd.Process.Signal(os.Interrupt); err != nil {
 		return fmt.Errorf("interrupt docker compose: %w", err)
+	}
+	return nil
+}
+
+// killGroup kills docker; on Windows the plugin is not reached.
+func killGroup(cmd *exec.Cmd) error {
+	if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		return fmt.Errorf("kill docker compose: %w", err)
 	}
 	return nil
 }

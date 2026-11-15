@@ -101,13 +101,16 @@ stack's network (`dev.tule.functions.instance`), as does `tule down
 functions`. Removing the whole stack, it removes functions first, so no
 invocation starts a function container while the network is taken down.
 
-On Ctrl-C, or when `tule` is stopped with a signal, `tule` passes the
-interrupt to compose and gives it a minute to exit before it is killed,
-then removes its temporary files. On Linux and macOS, compose runs in a
-process group of its own, which gets the interrupt whether or not the
-output is a terminal. On Windows, Ctrl-C in the console reaches compose
-directly, but a stop sent to `tule` alone does not: compose is killed
-once the minute has passed. This is not tested on Windows.
+On Ctrl-C, a termination (`SIGTERM`) or a hangup (`SIGHUP`), `tule`
+passes the interrupt to compose and gives it a minute to exit before it
+is killed, then removes its temporary files. A second signal kills
+compose at once, and `tule` with it. On Linux and macOS, compose runs in
+a process group of its own, which gets the interrupt whether or not the
+output is a terminal, and is woken if the terminal stopped it. On
+Windows, Ctrl-C in the console reaches compose directly, but a stop sent
+to `tule` alone does not: compose is killed once the minute has passed,
+or at a second signal, and the compose plugin docker runs may be left
+running. This is not tested on Windows.
 
 ### tule logs, restart and reset
 
