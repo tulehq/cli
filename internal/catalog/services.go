@@ -124,7 +124,7 @@ var services = []*Service{
 		Name:    Functions,
 		AWS:     "Lambda",
 		Image:   Registry + "/functions",
-		Version: "0.6.1",
+		Version: "0.7.0",
 		Ports: []Port{
 			{Name: PortAPI, Default: functionsPort},
 			{Name: PortRuntime, Default: functionsRuntimeAPIPort},
@@ -151,7 +151,7 @@ var services = []*Service{
 	{
 		Name:    Console,
 		Image:   Registry + "/console",
-		Version: "0.3.9",
+		Version: "0.3.10",
 		Ports:   []Port{{Name: PortAPI, Default: consolePort}},
 		DependsOn: []string{
 			Identity, Accounts, ObjectStore, SecretStore, Mailbox, Queues,

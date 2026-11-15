@@ -122,7 +122,7 @@ inside Docker Desktop's VM, whose group is not the one `stat` reports on the
 host; this prints it:
 
 ```sh
-docker run --rm --entrypoint stat -v /var/run/docker.sock:/s ghcr.io/tulehq/functions:0.6.1 -c %g /s
+docker run --rm --entrypoint stat -v /var/run/docker.sock:/s ghcr.io/tulehq/functions:0.7.0 -c %g /s
 ```
 
 functions' README marks the Docker Desktop setup as untried. Function containers reach functions' Runtime
