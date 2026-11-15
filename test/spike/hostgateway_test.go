@@ -12,6 +12,12 @@ import (
 // --add-host host.docker.internal:host-gateway reaches a service whose port
 // is published on 127.0.0.1 only. The 0.0.0.0 publish is the control.
 func TestHostGatewayReachesPublishedPort(t *testing.T) {
+	// Pulled first, so the first case does not also pay for the pull.
+	pullCtx, pullCancel := context.WithTimeout(t.Context(), 5*time.Minute)
+	defer pullCancel()
+	if _, err := docker(pullCtx, "pull", "-q", probeImage); err != nil {
+		t.Fatalf("pull %s: %v", probeImage, err)
+	}
 	for _, bindIP := range []string{"127.0.0.1", "0.0.0.0"} {
 		t.Run("published on "+bindIP, func(t *testing.T) {
 			port := startObjectStore(t, bindIP)
