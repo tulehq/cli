@@ -171,6 +171,13 @@ type difference struct {
 // profile, but its file configures it, and its wiring is what is compared.
 func paritySelection() []string { return catalog.Names() }
 
+// parityStack is the stack the render is compared as.
+const parityStack = "tule"
+
+// composeProjectName is the interpolation of the project name compose
+// sets, as console's compose.yaml writes it.
+const composeProjectName = "${COMPOSE_PROJECT_NAME}"
+
 // parityDocker is what the render is given for the socket: the socket compose
 // mounts, and group 0, what compose's ${DOCKER_GID:-0} is when unset.
 var parityDocker = Docker{SocketPath: "/var/run/docker.sock", GroupID: "0"}
@@ -206,10 +213,30 @@ var intendedDifferences = []difference{
 		},
 	},
 	{
+		name: "COMPOSE_PROJECT_NAME interpolation",
+		reason: "compose sets COMPOSE_PROJECT_NAME to the project's name for " +
+			"interpolation, and console names functions' network with it; the CLI " +
+			"writes the stack's network by name. The check gives it the stack the " +
+			"render is compared as. Only that variable, written exactly so, is " +
+			"substituted: any other $ in a value stays a difference",
+		apply: func(c *paritySide) bool {
+			changed := false
+			for _, svc := range c.services {
+				for k, v := range svc.Environment {
+					if strings.Contains(v, composeProjectName) {
+						svc.Environment[k] = strings.ReplaceAll(v, composeProjectName, parityStack)
+						changed = true
+					}
+				}
+			}
+			return changed
+		},
+	},
+	{
 		name: "DOCKER_GID interpolation",
 		reason: "compose reads the socket's group from DOCKER_GID at up, defaulting to " +
-			"0; the CLI writes the group it is given (the --docker-gid flag for now, " +
-			"probed from the daemon later); the check gives it 0",
+			"0; the CLI writes the group it is given (probed on the daemon by tule up, " +
+			"or --docker-gid); the check gives it 0",
 		apply: func(c *paritySide) bool {
 			s := c.services[catalog.Functions]
 			if s == nil || !slices.Equal(s.GroupAdd, []string{"${DOCKER_GID:-0}"}) {
@@ -274,7 +301,7 @@ func TestParityWithConsoleCompose(t *testing.T) {
 	}
 
 	renderedYAML := renderYAML(t, Input{
-		Stack:     "tule",
+		Stack:     parityStack,
 		Config:    parse(t, ""),
 		Selection: selection(t, paritySelection()...),
 		Docker:    parityDocker,

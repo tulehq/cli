@@ -53,6 +53,11 @@ func TestStacks(t *testing.T) {
 
 	checkRefusals(t, a, b)
 	checkDownQueues(t, a)
+	checkEnvReadBack(t, a)
+	checkLogs(t, a)
+	checkRestartKeepsData(t, a)
+	checkReset(t, a)
+	checkUpFunctions(t, a)
 
 	for _, s := range []*stackDir{b, a} {
 		out := s.must("down", "--volumes")
@@ -62,6 +67,9 @@ func TestStacks(t *testing.T) {
 		if containers, volumes := stackResources(t, s.name); containers != "" || volumes != "" {
 			t.Errorf("stack %s left containers %q and volumes %q", s.name, containers, volumes)
 		}
+	}
+	if left := probeContainers(t); len(left) > 0 {
+		t.Errorf("down left function containers: %v", left)
 	}
 }
 
@@ -370,11 +378,20 @@ var wantRecreated = []string{catalog.ObjectStore, catalog.Console}
 // the ones the plan in out listed as recreated, and those wired to queues.
 func checkRecreated(t *testing.T, step, out string, before, after map[string]string) {
 	t.Helper()
+	checkRecreatedAre(t, step, out, before, after, wantRecreated)
+}
+
+// checkRecreatedAre checks the services whose containers changed are
+// exactly the ones the plan in out listed as recreated, and want.
+func checkRecreatedAre(t *testing.T, step, out string, before, after map[string]string,
+	want []string,
+) {
+	t.Helper()
 	got := recreated(before, after)
 	listed := planRecreated(out)
-	if !slices.Equal(got, listed) || !slices.Equal(got, wantRecreated) {
+	if !slices.Equal(got, listed) || !slices.Equal(got, want) {
 		t.Errorf("%s recreated %v, and its plan listed %v; want both %v",
-			step, got, listed, wantRecreated)
+			step, got, listed, want)
 	}
 }
 

@@ -15,14 +15,16 @@ import (
 )
 
 func newDownCommand(g *globals) *cobra.Command {
-	var volumes bool
+	var volumes, skipPortCheck bool
 	cmd := &cobra.Command{
 		Use:   "down [service...]",
 		Short: "Remove services from the stack, or the whole stack",
 		Long: "With services named, remove them from the stack: the services wired to them are\n" +
 			"recreated without their endpoints, and listed first. With none named, remove the\n" +
 			"whole stack. Data is kept in the stack's volumes unless --volumes is given.\n" +
-			"Function containers left on the stack's network are removed too.",
+			"Function containers left on the stack's network are removed too.\n\n" +
+			"With services named, the host ports of the services recreated are checked free\n" +
+			"on this machine first; with a remote Docker daemon, pass --skip-port-check.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			rt, err := g.runtime(cmd)
 			if err != nil {
@@ -35,10 +37,13 @@ func newDownCommand(g *globals) *cobra.Command {
 			if len(args) == 0 {
 				return g.downStack(cmd, rt, st, volumes)
 			}
-			return g.downServices(cmd, rt, st, args, volumes)
+			return g.downServices(cmd, rt, st, args, downOptions{
+				volumes: volumes, checkPorts: !skipPortCheck,
+			})
 		},
 	}
 	cmd.Flags().BoolVar(&volumes, "volumes", false, "also delete the volumes, and the data in them")
+	addSkipPortCheck(cmd, &skipPortCheck)
 	return cmd
 }
 
@@ -51,15 +56,14 @@ func (g *globals) downStack(
 	st *stack.State,
 	volumes bool,
 ) error {
-	if err := warnConfigConflict(cmd, st); err != nil {
+	if err := warnRemovingConflict(cmd, st); err != nil {
 		return err
 	}
-	// They hold the stack's network, which compose removes next.
-	if err := removeFunctionContainers(cmd, rt, g.stack); err != nil {
+	if err := removeFunctions(cmd, rt, st); err != nil {
 		return err
 	}
 	if st.Running() {
-		err := rt.Down(cmd.Context(), downProject(st), runtime.DownOptions{Volumes: volumes})
+		err := rt.Down(cmd.Context(), stateProject(st), runtime.DownOptions{Volumes: volumes})
 		if err != nil {
 			return err //nolint:wrapcheck // The runtime says what failed.
 		}
@@ -82,6 +86,28 @@ func (g *globals) downStack(
 	default:
 		return writeLine(cmd, "stack "+g.stack+" has no containers")
 	}
+}
+
+// removeFunctions removes functions, then the function containers it left.
+// functions goes first, so it starts no function container after the sweep:
+// they hold the stack's network, which compose down removes next.
+func removeFunctions(cmd *cobra.Command, rt runtime.Runtime, st *stack.State) error {
+	if _, ok := st.Containers[catalog.Functions]; ok {
+		err := rt.RemoveServices(cmd.Context(), stateProject(st), []string{catalog.Functions})
+		if err != nil {
+			return err //nolint:wrapcheck // The runtime says what failed.
+		}
+	}
+	return removeFunctionContainers(cmd, rt, st.Name)
+}
+
+// warnRemovingConflict warns of a stack whose containers were created from
+// more than one config file, which down removes all the same.
+func warnRemovingConflict(cmd *cobra.Command, st *stack.State) error {
+	if conflict := st.ConfigConflict(); conflict != nil {
+		return warn(cmd, conflict.Conflict()+"; removing all of it")
+	}
+	return nil
 }
 
 // removeCatalogVolumes deletes the stack's volumes of every catalog
@@ -113,11 +139,13 @@ func removeFunctionContainers(cmd *cobra.Command, rt runtime.Runtime, name strin
 	return writeLine(cmd, fmt.Sprintf("removed %d function containers", n))
 }
 
-// downProject is the project compose takes down: the stack's services as
-// its containers report them, and their volumes. Compose removes the
-// containers of any other service as orphans. The container services are
-// catalog names, which the state checked.
-func downProject(st *stack.State) *render.Project {
+// stateProject is the stack's project as its containers report it: its
+// services, by image alone, and their volumes. It is enough for compose to
+// find the containers, to take them down, show their logs or restart them,
+// and needs no configuration. Compose removes the containers of any other
+// service as orphans. The container services are catalog names, which the
+// state checked.
+func stateProject(st *stack.State) *render.Project {
 	p := &render.Project{
 		Name:     st.Name,
 		Services: map[string]render.Service{},
@@ -135,12 +163,11 @@ func downProject(st *stack.State) *render.Project {
 	return p
 }
 
-// errDownKeepsFunctions is returned when removing services would re-render
-// a stack that keeps functions, which tule does not render for a stack yet.
-var errDownKeepsFunctions = errors.New(
-	"the stack runs functions, which tule does not manage yet, so it cannot remove " +
-		"other services alone; name functions too, or remove the whole stack with tule down",
-)
+// downOptions configures down with services named.
+type downOptions struct {
+	volumes    bool
+	checkPorts bool
+}
 
 // downServices removes services from the stack's selection and brings the
 // stack to the rest.
@@ -149,17 +176,14 @@ func (g *globals) downServices(
 	rt runtime.Runtime,
 	st *stack.State,
 	names []string,
-	volumes bool,
+	opts downOptions,
 ) error {
 	rest, err := remaining(st, names)
 	if err != nil {
 		return err
 	}
 	if len(rest) == 0 {
-		return g.downStack(cmd, rt, st, volumes)
-	}
-	if slices.Contains(rest, catalog.Functions) {
-		return errDownKeepsFunctions
+		return g.downStack(cmd, rt, st, opts.volumes)
 	}
 	sel, err := catalog.NewSelection(rest)
 	if errors.Is(err, catalog.ErrConsoleAlone) {
@@ -178,10 +202,10 @@ func (g *globals) downServices(
 	if err = st.CheckConfig(cfg.Path); err != nil {
 		return err //nolint:wrapcheck // Names the config files.
 	}
-	if err = g.apply(cmd, rt, cfg, st, sel, true); err != nil {
+	if err = g.apply(cmd, rt, cfg, st, sel, applyOptions{checkPorts: opts.checkPorts}); err != nil {
 		return err
 	}
-	if err = removeLeftovers(cmd, rt, st, names, volumes); err != nil {
+	if err = removeLeftovers(cmd, rt, st, names, opts.volumes); err != nil {
 		return err
 	}
 	return writeLine(

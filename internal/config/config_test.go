@@ -106,7 +106,7 @@ func TestSelectionPrecedence(t *testing.T) {
 	}
 }
 
-func TestFunctionsPortsFollowTheOffset(t *testing.T) {
+func TestFunctionsPublishesItsAPIPortAlone(t *testing.T) {
 	cfg, _ := mustParse(t, "portOffset: 1000\nports: {functions: 7000}")
 	sel, err := catalog.NewSelection([]string{"functions"})
 	if err != nil {
@@ -119,8 +119,8 @@ func TestFunctionsPortsFollowTheOffset(t *testing.T) {
 	if got := ports.Of("functions", catalog.PortAPI); got != 7000 {
 		t.Errorf("api = %d, want 7000", got)
 	}
-	if got := ports.Of("functions", catalog.PortRuntime); got != 10061 {
-		t.Errorf("runtime = %d, want 9061+1000", got)
+	if got := len(ports["functions"]); got != 1 {
+		t.Errorf("functions has %d host ports, want its API port alone", got)
 	}
 }
 

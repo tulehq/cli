@@ -5,6 +5,7 @@ package runtime
 
 import (
 	"context"
+	"io"
 
 	"tule.dev/cli/internal/render"
 )
@@ -29,6 +30,12 @@ type Runtime interface {
 	// Up creates or recreates the project's services, removes the stack's
 	// containers of services not in it, and waits until they are healthy.
 	Up(ctx context.Context, p *render.Project) error
+	// UpServices creates or recreates services of the project alone, not
+	// the services they depend on, and waits until they are healthy.
+	UpServices(ctx context.Context, p *render.Project, services []string) error
+	// RemoveServices stops and removes the containers of services of the
+	// project, and leaves their volumes.
+	RemoveServices(ctx context.Context, p *render.Project, services []string) error
 	// Down removes the project's containers and network, and its volumes
 	// with opts.Volumes.
 	Down(ctx context.Context, p *render.Project, opts DownOptions) error
@@ -46,6 +53,9 @@ type Runtime interface {
 	// RemoveFunctionContainers removes the function containers attached to
 	// the stack's network, and returns how many it removed.
 	RemoveFunctionContainers(ctx context.Context, stack string) (int, error)
+	// SocketGroup returns the group ID that owns the Docker socket at
+	// socketPath on the daemon's host, as a container from image sees it.
+	SocketGroup(ctx context.Context, image, socketPath string) (string, error)
 }
 
 // DownOptions configures Down.
@@ -56,6 +66,8 @@ type DownOptions struct {
 
 // LogsOptions configures Logs.
 type LogsOptions struct {
+	// Out is where the logs go.
+	Out io.Writer
 	// Since shows logs since a timestamp or a duration such as 10m.
 	Since string
 	// Services are the services to show; none is every service.
@@ -86,6 +98,8 @@ type Container struct {
 	Ports []Port
 	// Mounts are the named volumes mounted.
 	Mounts []Mount
+	// GroupAdd are the supplementary groups the container runs with.
+	GroupAdd []string
 }
 
 // Port is one published port.

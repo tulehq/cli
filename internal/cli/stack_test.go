@@ -5,9 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"maps"
 	"net"
+	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -24,14 +27,19 @@ import (
 // fakeRuntime keeps a stack in memory: Up runs a project as compose would,
 // recreating its services and removing the others.
 type fakeRuntime struct {
-	checkErr       error
+	checkErr error
+	// socketGroup is what SocketGroup answers; probes counts its calls.
+	socketGroup    string
 	containers     []runtime.Container
 	volumes        []runtime.Volume
 	ups            []*render.Project
 	downs          []*render.Project
 	removedVolumes []string
-	functions      int
-	downVolumes    bool
+	// calls records the other operations, such as "restart queues".
+	calls       []string
+	probes      int
+	functions   int
+	downVolumes bool
 }
 
 func (f *fakeRuntime) Check(context.Context) error { return f.checkErr }
@@ -52,6 +60,7 @@ func (f *fakeRuntime) Up(_ context.Context, p *render.Project) error {
 
 func (f *fakeRuntime) Down(_ context.Context, p *render.Project, opts runtime.DownOptions) error {
 	f.downs = append(f.downs, p)
+	f.calls = append(f.calls, "down")
 	f.downVolumes = opts.Volumes
 	f.containers = nil
 	if opts.Volumes {
@@ -63,12 +72,72 @@ func (f *fakeRuntime) Down(_ context.Context, p *render.Project, opts runtime.Do
 	return nil
 }
 
-func (f *fakeRuntime) Logs(context.Context, *render.Project, runtime.LogsOptions) error {
-	return errors.New("not used")
+// UpServices recreates services of p, as compose up --no-deps does.
+func (f *fakeRuntime) UpServices(_ context.Context, p *render.Project, services []string) error {
+	f.calls = append(f.calls, "up "+strings.Join(services, " "))
+	for _, c := range stacktest.Containers(p) {
+		if slices.Contains(services, c.Labels[render.LabelService]) {
+			f.containers = append(f.containers, c)
+		}
+	}
+	for _, v := range stacktest.Volumes(p) {
+		if !slices.ContainsFunc(
+			f.volumes,
+			func(have runtime.Volume) bool { return have.Name == v.Name },
+		) {
+			f.volumes = append(f.volumes, v)
+		}
+	}
+	return nil
 }
 
-func (f *fakeRuntime) Restart(context.Context, *render.Project, []string) error {
-	return errors.New("not used")
+func (f *fakeRuntime) RemoveServices(
+	_ context.Context,
+	_ *render.Project,
+	services []string,
+) error {
+	f.calls = append(f.calls, "rm "+strings.Join(services, " "))
+	f.containers = slices.DeleteFunc(f.containers, func(c runtime.Container) bool {
+		return slices.Contains(services, c.Labels[render.LabelService])
+	})
+	return nil
+}
+
+func (f *fakeRuntime) Logs(ctx context.Context, p *render.Project, opts runtime.LogsOptions) error {
+	f.calls = append(f.calls, "logs "+strings.Join(logsFlags(opts), " "))
+	if ctx.Err() != nil {
+		// As compose ends on the interrupt.
+		return fmt.Errorf("docker compose logs: %w", ctx.Err())
+	}
+	services := strings.Join(slices.Sorted(maps.Keys(p.Services)), ",")
+	if _, err := io.WriteString(opts.Out, "logs of "+services+"\n"); err != nil {
+		return fmt.Errorf("write the logs: %w", err)
+	}
+	return nil
+}
+
+func logsFlags(opts runtime.LogsOptions) []string {
+	out := slices.Clone(opts.Services)
+	if opts.Follow {
+		out = append(out, "-f")
+	}
+	if opts.Since != "" {
+		out = append(out, "--since="+opts.Since)
+	}
+	return out
+}
+
+func (f *fakeRuntime) Restart(_ context.Context, _ *render.Project, services []string) error {
+	f.calls = append(f.calls, strings.TrimSpace("restart "+strings.Join(services, " ")))
+	return nil
+}
+
+func (f *fakeRuntime) SocketGroup(context.Context, string, string) (string, error) {
+	f.probes++
+	if f.socketGroup == "" {
+		return "", errors.New("no socket group")
+	}
+	return f.socketGroup, nil
 }
 
 func (f *fakeRuntime) PS(context.Context, string) ([]runtime.Container, error) {
@@ -109,11 +178,30 @@ func runCapture(
 	args ...string,
 ) (stdout, stderr string, err error) {
 	t.Helper()
+	return runInput(t, rt, dir, nil, args...)
+}
+
+// runInput is runCapture with standard input: a terminal reading stdin when
+// it is not nil, and no terminal when it is.
+func runInput(
+	t *testing.T,
+	rt runtime.Runtime,
+	dir string,
+	stdin io.Reader,
+	args ...string,
+) (stdout, stderr string, err error) {
+	t.Helper()
 	t.Chdir(dir)
-	root := newRootCommand(func(io.Writer) runtime.Runtime { return rt })
+	root := newRootCommand(
+		func(io.Writer) runtime.Runtime { return rt },
+		func() bool { return stdin != nil },
+	)
 	var out, errOut bytes.Buffer
 	root.SetOut(&out)
 	root.SetErr(&errOut)
+	if stdin != nil {
+		root.SetIn(stdin)
+	}
 	root.SetArgs(args)
 	err = root.Execute()
 	if errOut.Len() > 0 {
@@ -230,14 +318,144 @@ func TestUpRefusesAnotherConfigFile(t *testing.T) {
 	}
 }
 
-func TestUpRefusesFunctions(t *testing.T) {
+func TestUpFunctionsProbesTheSocketGroup(t *testing.T) {
+	rt, dir := upFunctions(t)
+
+	// A running functions keeps its group: no probe, nothing recreated.
+	out, err := runWith(t, rt, dir, "up")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rt.probes != 1 || strings.Contains(out, "Recreating") {
+		t.Errorf("a bare up probed %d times in all, output:\n%s", rt.probes, out)
+	}
+
+	// --docker-gid overrides it, and the plan says so.
+	out, err = runWith(t, rt, dir, "up", "--docker-gid", "1001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "functions: Docker socket group changed") {
+		t.Errorf("output:\n%s", out)
+	}
+	if got := rt.containers[0].GroupAdd; !slices.Equal(got, []string{"1001"}) {
+		t.Errorf("functions group = %v, want 1001", got)
+	}
+}
+
+// upFunctions starts object-store and queues, then adds functions, and
+// checks functions was given the probed group and the stack network, and
+// that only object-store, which is wired to it, was recreated.
+func upFunctions(t *testing.T) (*fakeRuntime, string) {
+	t.Helper()
+	dir := writeConfig(t, freePorts(t))
+	rt := &fakeRuntime{socketGroup: "989"}
+	if _, err := runWith(t, rt, dir, "up", "queues", "object-store"); err != nil {
+		t.Fatal(err)
+	}
+	if rt.probes != 0 {
+		t.Errorf("probed the socket group %d times without functions", rt.probes)
+	}
+	out, err := runWith(t, rt, dir, "up", "functions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rt.probes != 1 {
+		t.Errorf("probed the socket group %d times, want once", rt.probes)
+	}
+	functions := rt.ups[len(rt.ups)-1].Services[catalog.Functions]
+	if !slices.Equal(functions.GroupAdd, []string{"989"}) {
+		t.Errorf("functions group_add = %v, want the probed group", functions.GroupAdd)
+	}
+	if got := functions.Environment["TULE_Functions_ContainerNetwork"]; got != "tule_default" {
+		t.Errorf("TULE_Functions_ContainerNetwork = %q, want the stack network", got)
+	}
+	if len(functions.Ports) != 1 {
+		t.Errorf("functions publishes %v, want its API port alone", functions.Ports)
+	}
+	want := "Recreating, because their wiring changed:\n" +
+		"  object-store: TULE_Storage_FunctionsEndpoint added\n" +
+		"Starting: functions\n"
+	if !strings.Contains(out, want) {
+		t.Errorf("output:\n%s\nwant it to hold:\n%s", out, want)
+	}
+	return rt, dir
+}
+
+func TestUpFunctionsProbeFailure(t *testing.T) {
 	rt := &fakeRuntime{}
-	_, err := runWith(t, rt, writeConfig(t, freePorts(t)), "up", "functions", "queues")
-	if !errors.Is(err, errFunctionsUnsupported) {
-		t.Errorf("up functions = %v", err)
+	_, err := runWith(t, rt, writeConfig(t, freePorts(t)), "up", "functions")
+	if err == nil || !strings.Contains(err.Error(), "pass --docker-gid") {
+		t.Errorf("up functions with a failing probe = %v", err)
 	}
 	if len(rt.ups) != 0 {
 		t.Error("ran up")
+	}
+	_, err = runWith(t, rt, writeConfig(t, freePorts(t)), "up", "functions", "--docker-gid", "x")
+	if err == nil || !strings.Contains(err.Error(), "--docker-gid") {
+		t.Errorf("up --docker-gid x = %v", err)
+	}
+}
+
+func TestUpAddsToAStackLeftWithTheConsoleAlone(t *testing.T) {
+	dir := writeConfig(t, freePorts(t))
+	rt := &fakeRuntime{}
+	if _, err := runWith(t, rt, dir, "up", "queues", "console"); err != nil {
+		t.Fatal(err)
+	}
+	// What an interrupted down can leave.
+	rt.containers = slices.DeleteFunc(rt.containers, func(c runtime.Container) bool {
+		return c.Labels[render.LabelService] == catalog.Queues
+	})
+	if _, err := runWith(t, rt, dir, "up", "object-store"); err != nil {
+		t.Fatalf("up object-store on a stack left with the console alone = %v", err)
+	}
+	if got := selectionOf(t, rt); got != "object-store,console" {
+		t.Errorf("selection = %s", got)
+	}
+}
+
+func TestUpRefusesADowngrade(t *testing.T) {
+	ports := freePorts(t)
+	dir := writeConfig(t, ports)
+	rt := &fakeRuntime{}
+	if _, err := runWith(t, rt, dir, "up", "queues"); err != nil {
+		t.Fatal(err)
+	}
+	queues := mustLookup(catalog.Queues)
+	rewriteConfig(t, dir, ports+"versions: {queues: 0.1.0}\n")
+	out, err := runWith(t, rt, dir, "up")
+	if !errors.Is(err, stack.ErrDowngrade) || !strings.Contains(err.Error(), "--allow-downgrade") {
+		t.Errorf("up going down a version = %v", err)
+	}
+	if !strings.Contains(out, "queues "+queues.Version+" -> 0.1.0 (downgrade)") {
+		t.Errorf("the version change is not listed before the refusal:\n%s", out)
+	}
+	if len(rt.ups) != 1 {
+		t.Fatalf("ran up %d times, want once", len(rt.ups))
+	}
+	if _, err = runWith(t, rt, dir, "up", "--allow-downgrade"); err != nil {
+		t.Fatalf("up --allow-downgrade = %v", err)
+	}
+	if got := rt.containers[0].Image; got != queues.ImageRef("0.1.0") {
+		t.Errorf("queues runs %s after the downgrade", got)
+	}
+	// Going back up needs no flag.
+	rewriteConfig(t, dir, ports)
+	if _, err = runWith(t, rt, dir, "up"); err != nil {
+		t.Errorf("up going up a version = %v", err)
+	}
+}
+
+// rewriteConfig replaces the tule.yaml in dir.
+func rewriteConfig(t *testing.T, dir, content string) {
+	t.Helper()
+	if err := os.WriteFile(
+		filepath.Join(dir, config.FileName),
+		[]byte(content),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -492,33 +710,80 @@ func TestTwoConfigsStatusAndDownStillWork(t *testing.T) {
 }
 
 func TestDownServiceKeepingFunctions(t *testing.T) {
-	cfg, _, err := config.Parse([]byte(freePorts(t)))
+	dir := writeConfig(t, freePorts(t))
+	rt := &fakeRuntime{socketGroup: "989"}
+	if _, err := runWith(t, rt, dir, "up", "functions", "queues", "object-store"); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runWith(t, rt, dir, "down", "object-store")
+	if err != nil {
+		t.Fatalf("down object-store = %v", err)
+	}
+	if rt.probes != 1 {
+		t.Errorf("probed %d times; down should keep the running functions' group", rt.probes)
+	}
+	if strings.Contains(out, "functions:") {
+		t.Errorf("down object-store recreates functions:\n%s", out)
+	}
+	if got := selectionOf(t, rt); got != "queues,functions" {
+		t.Errorf("selection = %s", got)
+	}
+	rt.functions = 3
+	out, err = runWith(t, rt, dir, "down", "functions")
 	if err != nil {
 		t.Fatal(err)
 	}
-	sel, err := catalog.NewSelection(
-		[]string{catalog.Functions, catalog.Queues, catalog.ObjectStore},
-	)
+	if got := selectionOf(t, rt); got != "queues" {
+		t.Errorf("selection = %s", got)
+	}
+	if !strings.Contains(out, "removed 3 function containers") {
+		t.Errorf("output:\n%s", out)
+	}
+}
+
+func TestDownServicesSkipPortCheck(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, err := render.Render(render.Input{
-		Stack: "tule", Config: cfg, Selection: sel,
-		Docker: render.Docker{SocketPath: dockerSocket, GroupID: "989"},
-	})
-	if err != nil {
+	defer func() { _ = l.Close() }()
+	ports := freePorts(t)
+	dir := writeConfig(t, ports)
+	rt := &fakeRuntime{}
+	if _, err = runWith(t, rt, dir, "up", "object-store", "queues"); err != nil {
 		t.Fatal(err)
 	}
-	rt := &fakeRuntime{containers: stacktest.Containers(p)}
-	_, err = runWith(t, rt, t.TempDir(), "down", "object-store")
-	if !errors.Is(err, errDownKeepsFunctions) {
-		t.Errorf("down object-store = %v, want %v", err, errDownKeepsFunctions)
+	// object-store is recreated on a port something else holds.
+	busy := "ports: {object-store: " + strconv.Itoa(l.Addr().(*net.TCPAddr).Port) + "}\n"
+	if err = os.WriteFile(
+		filepath.Join(dir, config.FileName),
+		[]byte(ports+busy),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := runWith(t, rt, t.TempDir(), "down", "functions", "queues"); err != nil {
-		t.Errorf("down functions queues = %v", err)
+	if _, err = runWith(t, rt, dir, "down", "queues"); err == nil ||
+		!strings.Contains(err.Error(), "ports: {object-store: <port>}") {
+		t.Errorf("down queues onto a busy port = %v", err)
+	}
+	if _, err = runWith(t, rt, dir, "down", "queues", "--skip-port-check"); err != nil {
+		t.Errorf("down queues --skip-port-check = %v", err)
 	}
 	if got := selectionOf(t, rt); got != "object-store" {
 		t.Errorf("selection = %s", got)
+	}
+}
+
+func TestDownStackWithTwoConfigsSaysItRemovesIt(t *testing.T) {
+	rt, _ := twoConfigStack(t)
+	_, stderr, err := runCapture(t, rt, t.TempDir(), "down")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(stderr, "remove it with tule down") ||
+		!strings.Contains(stderr, "more than one config file") ||
+		!strings.Contains(stderr, "removing all of it") {
+		t.Errorf("stderr = %q", stderr)
 	}
 }
 

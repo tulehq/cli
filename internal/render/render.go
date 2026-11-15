@@ -91,6 +91,12 @@ func ValidateStack(name string) error {
 	return nil
 }
 
+// NetworkName is the network compose makes for a stack, its default
+// network, named as Docker names it.
+func NetworkName(stack string) string {
+	return stack + "_default"
+}
+
 // Render returns the compose project for in.
 func Render(in Input) (*Project, error) {
 	if err := ValidateStack(in.Stack); err != nil {
@@ -108,6 +114,7 @@ func Render(in Input) (*Project, error) {
 		HostPorts:  hostPorts,
 		PublicHost: in.Config.PublicHost,
 		RootKey:    in.Config.RootKey,
+		Network:    NetworkName(in.Stack),
 	}
 	p := &Project{Name: in.Stack, Services: map[string]Service{}, Volumes: map[string]Volume{}}
 	for _, svc := range in.Selection.Services() {

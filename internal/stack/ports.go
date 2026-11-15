@@ -14,7 +14,7 @@ import (
 // Binding is one host port a service is published on.
 type Binding struct {
 	Service string
-	// Port is the port's name, catalog.PortAPI or catalog.PortRuntime.
+	// Port is the port's name, catalog.PortAPI.
 	Port      string
 	HostIP    string
 	HostPort  int
@@ -101,11 +101,8 @@ func Preflight(ctx context.Context, bindings []Binding, held func(ip string, por
 
 // moveHint names the tule.yaml keys that move a binding.
 func moveHint(b Binding) string {
-	if b.Port == catalog.PortAPI {
-		return fmt.Sprintf(
-			"set another in tule.yaml with ports: {%s: <port>}, or move every port with portOffset:",
-			b.Service,
-		)
-	}
-	return "move it in tule.yaml with portOffset:, which moves every port"
+	return fmt.Sprintf(
+		"set another in tule.yaml with ports: {%s: <port>}, or move every port with portOffset:",
+		b.Service,
+	)
 }

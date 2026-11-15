@@ -114,10 +114,29 @@ func (s *State) Configs() []string {
 	return paths
 }
 
+// ConfigConflictError is a stack whose containers were created from more
+// than one config file.
+type ConfigConflictError struct {
+	// Stack is the stack name.
+	Stack string
+	// Parts say which services came from which file.
+	Parts []string
+}
+
+// Conflict says which services came from which file, without a fix.
+func (e *ConfigConflictError) Conflict() string {
+	return fmt.Sprintf("stack %q was started from more than one config file: %s",
+		e.Stack, strings.Join(e.Parts, "; "))
+}
+
+func (e *ConfigConflictError) Error() string {
+	return e.Conflict() + "; remove it with tule down --stack " + e.Stack
+}
+
 // ConfigConflict reports containers created from more than one config file.
 // Removing the whole stack and its status still work; rendering it does
 // not.
-func (s *State) ConfigConflict() error {
+func (s *State) ConfigConflict() *ConfigConflictError {
 	if len(s.configs) < 2 {
 		return nil
 	}
@@ -131,12 +150,7 @@ func (s *State) ConfigConflict() error {
 			fmt.Sprintf("%s from %s", strings.Join(services, ", "), DescribeConfig(path)),
 		)
 	}
-	return fmt.Errorf(
-		"stack %q was started from more than one config file: %s; remove it with tule down --stack %s",
-		s.Name,
-		strings.Join(parts, "; "),
-		s.Name,
-	)
+	return &ConfigConflictError{Stack: s.Name, Parts: parts}
 }
 
 // DescribeConfig names a config path for a message.

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -344,18 +345,6 @@ func TestPreflightBusyAPIPort(t *testing.T) {
 	}
 }
 
-func TestPreflightBusyRuntimePort(t *testing.T) {
-	busy := listen(t)
-	runtimePort := stack.Binding{
-		Service: "functions", Port: catalog.PortRuntime, HostIP: "127.0.0.1", HostPort: busy,
-	}
-	err := stack.Preflight(t.Context(), []stack.Binding{runtimePort}, never)
-	if err == nil || strings.Contains(err.Error(), "ports: {") ||
-		!strings.Contains(err.Error(), "portOffset:") {
-		t.Errorf("Preflight(busy runtime) = %v, want portOffset named alone", err)
-	}
-}
-
 func TestHeld(t *testing.T) {
 	cfg := parse(t, "")
 	st := state(t, project(t, cfg, catalog.Queues))
@@ -417,5 +406,80 @@ func TestStatus(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Status() =\n%+v\nwant\n%+v", got, want)
+	}
+}
+
+func TestDowngrade(t *testing.T) {
+	tests := []struct {
+		from, to string
+		down     bool
+	}{
+		{"0.6.1", "0.6.2", false},
+		{"0.6.1", "0.7.0", false},
+		{"0.6.1", "0.6.0", true},
+		{"0.10.0", "0.9.9", true},
+		{"0.7.0-rc.1", "0.7.0", false},
+		{"0.7.0", "0.7.0-rc.1", true},
+		{"latest", "0.7.0", true},
+	}
+	for _, tt := range tests {
+		v := stack.VersionChange{Service: "queues", From: tt.from, To: tt.to}
+		if got := v.Downgrade(); got != tt.down {
+			t.Errorf("%s -> %s: Downgrade() = %v, want %v", tt.from, tt.to, got, tt.down)
+		}
+	}
+}
+
+func TestPlanRefusesADowngrade(t *testing.T) {
+	st := state(t, project(t, parse(t, ""), catalog.Queues))
+	cfg := parse(t, "versions: {queues: 0.1.0}")
+	plan := stack.NewPlan(st, project(t, cfg, catalog.Queues), bindings(t, cfg, catalog.Queues))
+	err := plan.CheckDowngrades()
+	queues := stacktest.Lookup(catalog.Queues)
+	if !errors.Is(err, stack.ErrDowngrade) ||
+		!strings.Contains(err.Error(), "queues "+queues.Version+" -> 0.1.0") {
+		t.Errorf("CheckDowngrades() = %v", err)
+	}
+	var b strings.Builder
+	if err := plan.Write(&b); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(b.String(), "(downgrade)") {
+		t.Errorf("Write() does not mark the downgrade:\n%s", b.String())
+	}
+	if err := stack.NewPlan(st, project(t, parse(t, ""), catalog.Queues),
+		bindings(t, parse(t, ""), catalog.Queues)).CheckDowngrades(); err != nil {
+		t.Errorf("CheckDowngrades() with no version change = %v", err)
+	}
+}
+
+func TestPlanComparesTheSocketGroupOnlyWhenKnown(t *testing.T) {
+	cfg := parse(t, "")
+	render0 := func(gid string) *render.Project {
+		p, err := render.Render(render.Input{
+			Stack: "tule", Config: cfg, Selection: selection(t, catalog.Functions),
+			Docker: render.Docker{SocketPath: "/var/run/docker.sock", GroupID: gid},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	b := bindings(t, cfg, catalog.Functions)
+	containers := stacktest.Containers(render0("989"))
+	st := func() *stack.State {
+		s, err := stack.FromContainers("tule", containers, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	if plan := stack.NewPlan(st(), render0("1001"), b); len(plan.Recreate) != 1 ||
+		!slices.Equal(plan.Recreate[0].Reasons, []string{"Docker socket group changed"}) {
+		t.Errorf("a known group change: plan = %+v", plan)
+	}
+	containers[0].GroupAdd = nil // Not the one group tule gives functions.
+	if plan := stack.NewPlan(st(), render0("0"), b); len(plan.Recreate) != 0 {
+		t.Errorf("an unknown group: plan = %+v, want no change listed", plan)
 	}
 }

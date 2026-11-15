@@ -8,6 +8,7 @@ import (
 	"runtime/debug"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"tule.dev/cli/internal/config"
 	"tule.dev/cli/internal/render"
@@ -23,20 +24,31 @@ const DefaultStack = "tule"
 type globals struct {
 	// newRuntime returns the runtime, writing its progress to out.
 	newRuntime func(out io.Writer) runtime.Runtime
-	stack      string
-	configFile string
+	// stdinIsTerminal reports whether standard input is a terminal to ask
+	// questions on.
+	stdinIsTerminal func() bool
+	stack           string
+	configFile      string
 }
 
 // NewRootCommand returns the tule command with its subcommands, running
 // stacks with docker compose.
 func NewRootCommand() *cobra.Command {
-	return newRootCommand(func(out io.Writer) runtime.Runtime {
-		return runtime.NewCompose(out)
-	})
+	return newRootCommand(
+		func(out io.Writer) runtime.Runtime { return runtime.NewCompose(out) },
+		func() bool {
+			return term.IsTerminal(
+				int(os.Stdin.Fd()),
+			) //nolint:gosec // A file descriptor fits an int.
+		},
+	)
 }
 
-func newRootCommand(newRuntime func(out io.Writer) runtime.Runtime) *cobra.Command {
-	g := &globals{newRuntime: newRuntime}
+func newRootCommand(
+	newRuntime func(out io.Writer) runtime.Runtime,
+	stdinIsTerminal func() bool,
+) *cobra.Command {
+	g := &globals{newRuntime: newRuntime, stdinIsTerminal: stdinIsTerminal}
 	root := &cobra.Command{
 		Use:          "tule",
 		Short:        "Run a local Tule stack",
@@ -57,6 +69,9 @@ func newRootCommand(newRuntime func(out io.Writer) runtime.Runtime) *cobra.Comma
 		newUpCommand(g),
 		newDownCommand(g),
 		newStatusCommand(g),
+		newLogsCommand(g),
+		newRestartCommand(g),
+		newResetCommand(g),
 	)
 	return root
 }

@@ -11,8 +11,11 @@ import (
 	"tule.dev/cli/internal/render"
 )
 
+// functionsService is the catalog's functions.
+var functionsService = mustLookup(catalog.Functions)
+
 // functionsVersion is the tested functions version, for the hint below.
-var functionsVersion = mustLookup(catalog.Functions).Version
+var functionsVersion = functionsService.Version
 
 func mustLookup(name string) *catalog.Service {
 	svc, err := catalog.Lookup(name)
@@ -92,10 +95,8 @@ func newComposeCommand(g *globals) *cobra.Command {
 // checkDockerGID validates --docker-gid whenever it is given, and requires it
 // when functions is selected.
 func checkDockerGID(cmd *cobra.Command, sel catalog.Selection, gid string) error {
-	if cmd.Flags().Changed("docker-gid") {
-		if err := render.ValidateGroupID(gid); err != nil {
-			return fmt.Errorf("--docker-gid: %w", err)
-		}
+	if err := checkGIDFlag(cmd, gid); err != nil {
+		return err
 	}
 	if sel.Has(catalog.Functions) && gid == "" {
 		return errNoDockerGID

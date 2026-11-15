@@ -48,7 +48,30 @@ func run(m *testing.M) int {
 		fmt.Fprintln(os.Stderr, "build tule:", err)
 		return 1
 	}
+	if err := buildProbeImage(dir); err != nil {
+		fmt.Fprintln(os.Stderr, "build the probe function's image:", err)
+		return 1
+	}
+	defer removeProbeImage()
 	return m.Run()
+}
+
+// tuleEnv runs tule --stack <name> env in dir, and returns its standard
+// output and standard error apart.
+func (s *stackDir) tuleEnv(dir string) (stdout, stderr string) {
+	s.t.Helper()
+	ctx, cancel := context.WithTimeout(s.t.Context(), time.Minute)
+	defer cancel()
+	//nolint:gosec // The e2e test runs the tule it built, with its own arguments.
+	cmd := exec.CommandContext(ctx, tuleBinary, "--stack", s.name, "env")
+	cmd.Dir = dir
+	var errOut bytes.Buffer
+	cmd.Stderr = &errOut
+	out, err := cmd.Output()
+	if err != nil {
+		s.t.Fatalf("tule env in %s: %v\n%s", dir, err, errOut.String())
+	}
+	return string(out), errOut.String()
 }
 
 // stackDir is one stack: its name and the directory holding its tule.yaml.
@@ -152,16 +175,18 @@ func (s *stackDir) status() map[string]stack.ServiceStatus {
 	return byName
 }
 
-// awsConfig evaluates tule env in sh, as eval "$(tule env)" does, sets the
-// variables it exports in the test's environment, and loads the SDK's
-// default config from them.
+// awsConfig evaluates tule --stack <name> env in sh, as eval "$(tule env)"
+// does, sets the variables it exports in the test's environment, and loads
+// the SDK's default config from them. The stack is named: env reads a
+// running stack back, and without --stack it would read the default one.
 func (s *stackDir) awsConfig() aws.Config {
 	s.t.Helper()
 	ctx, cancel := context.WithTimeout(s.t.Context(), time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "sh", "-c", `eval "$("$TULE" env)" && env -0`)
+	cmd := exec.CommandContext(ctx, "sh", "-c", `eval "$("$TULE" --stack "$STACK" env)" && env -0`)
 	cmd.Dir = s.dir
-	cmd.Env = append(os.Environ(), "TULE="+tuleBinary, "AWS_SESSION_TOKEN=left-over")
+	cmd.Env = append(os.Environ(),
+		"TULE="+tuleBinary, "STACK="+s.name, "AWS_SESSION_TOKEN=left-over")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
