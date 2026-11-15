@@ -128,6 +128,15 @@ func checkUpFunctions(t *testing.T, a *stackDir) {
 	}
 
 	cfg := a.awsConfig()
+	if os.Getenv("AWS_ENDPOINT_URL_LAMBDA") == "" {
+		t.Fatalf("tule env set no AWS_ENDPOINT_URL_LAMBDA with functions running:\n%s",
+			a.must("env"))
+	}
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("functions' logs:\n%s", docker(t, "logs", "--tail", "100", functions))
+		}
+	})
 	ctx := t.Context()
 	role, err := iam.NewFromConfig(cfg).CreateRole(ctx, &iam.CreateRoleInput{
 		RoleName: aws.String("e2e-probe"), AssumeRolePolicyDocument: aws.String(lambdaTrust),
