@@ -20,11 +20,15 @@ Then `tule version` prints the version you installed.
 
 ## Commands
 
-`up` and the commands that run a stack come next; for now `tule` writes
-the compose file and the client variables for one.
+`tule` runs a stack with `docker compose`, so it needs the Docker Compose
+v2 plugin, which Docker Desktop includes and Linux installs as the
+`docker-compose-plugin` package. `logs`, `restart` and `reset` come next.
 
 | Command | Does |
 |---|---|
+| `tule up [service...]` | Starts the stack and waits until its services are healthy. A new stack runs the services named, or the configured ones, or the default set; on a running stack, the services named are added. Lists the services recreated because their wiring or version changes before acting |
+| `tule down [service...] [--volumes]` | With services named, removes them from the stack, and recreates the services wired to them without their endpoints. With none, removes the whole stack. `--volumes` also deletes the data |
+| `tule status [--json]` | Shows each service's state, health, version, host address and volume. Exits non-zero when a service is not running and healthy |
 | `tule services` | Lists the catalog: each service, the AWS service it stands in for, its image and tested version, its default ports |
 | `tule compose [service...] [-o file]` | Writes the compose file for the services named, or the configured ones, or the default set: every service but functions |
 | `tule env [--shell sh\|fish\|powershell]` | Prints the credentials, region and endpoint variables that point AWS SDKs and the AWS CLI at the configured services |
@@ -33,6 +37,63 @@ the compose file and the client variables for one.
 Every command takes `--stack <name>` (default `tule`), the compose project
 name that namespaces containers, network and volumes, and `--config
 <file>`, the configuration to read instead of `tule.yaml`.
+
+### tule up, down and status
+
+```sh
+tule up object-store queues # only these
+eval "$(tule env)"
+tule status
+tule up identity            # adds identity, and rewires the others to it
+tule down queues            # removes queues, and its endpoint from the others
+tule down                   # removes the stack; its data stays in its volumes
+tule up                     # on a new stack: the default set, every service but functions
+tule down --volumes         # removes the stack and deletes its data
+```
+
+`up` runs the same compose file `tule compose` writes, as
+`docker compose -p <stack> -f - up -d --wait`. Before it acts, it lists
+the version changes, the running services it recreates because their
+wiring or host ports change (by variable name; values are not printed), and
+the services it starts or removes. It also checks every host port it
+publishes is free, and names the service and the `ports:` or `portOffset:`
+key to change when one is not. The check listens on this machine, so it
+cannot see ports on a remote Docker host; there, pass `--skip-port-check`.
+
+Compose does not read a `.env` file in the directory `tule` runs from:
+`tule` gives it an empty env file instead, so the stack is the rendered
+file and nothing else.
+
+Nothing is kept on disk. The stack's services are the catalog services
+that have containers in its compose project, running or stopped, and each
+container carries the absolute path of the `tule.yaml` it was started from
+as the label `dev.tule.config` (empty for none). So `status`, and `down`
+of the whole stack, work from any directory. `up`, and `down` with
+services named, re-render the stack from its configuration, and refuse
+when the running stack was started from another `tule.yaml`, naming both.
+On a running stack, a bare `up` keeps the stack's services and warns when
+`services:` in `tule.yaml` names others: add services with `tule up
+<service...>`, and remove them with `tule down <service...>`.
+
+Volumes carry no tule labels, so a volume compose created from console's
+compose.yaml, under the same project name, is used as it is. Version
+changes are listed, not checked: a downgrade, which can serve stale data,
+is not refused yet, and after a `down` without `--volumes` the next `up`
+does not know which version wrote the kept data. `down --volumes` deletes the volumes of
+the catalog services only, not other volumes in the compose project.
+
+`tule up` does not run functions yet; write its compose file with `tule
+compose` and run it with `docker compose`. `tule down` also removes the
+function containers functions left on the stack's network
+(`dev.tule.functions.instance`).
+
+Two stacks run side by side under different `--stack` names, the second
+with a `portOffset` in its `tule.yaml`:
+
+```sh
+echo 'portOffset: 100' > other/tule.yaml
+(cd other && tule --stack other up object-store)  # object-store on 9100
+```
 
 ### tule compose
 
@@ -145,6 +206,7 @@ env: {object-store: {TULE_Server_Domain: localhost}}  # extra variables, set ove
 make        # lint, test and build
 make fmt
 make test
-make build  # writes build/tule
+make build     # writes build/tule
 make lint
+make test-e2e  # stacks from the released images on the local Docker daemon
 ```

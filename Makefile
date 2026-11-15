@@ -1,4 +1,4 @@
-.PHONY: default fmt test test-spike build lint
+.PHONY: default fmt test test-spike test-e2e build lint
 
 define run
 	@fail=0; \
@@ -26,6 +26,10 @@ test:
 
 test-spike:
 	go test -tags spike -count=1 -v -timeout 15m ./test/spike/...
+
+# Runs stacks on the local Docker daemon from the released images.
+test-e2e:
+	go test -tags e2e -count=1 -v -timeout 30m ./test/e2e/...
 
 build:
 	go build -o build/tule ./cmd/tule

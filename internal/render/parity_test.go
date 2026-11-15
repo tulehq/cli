@@ -31,7 +31,13 @@ type parityService struct {
 
 type parityProject struct {
 	Services map[string]*parityService `yaml:"services"`
-	Volumes  map[string]*Volume        `yaml:"volumes"`
+	Volumes  map[string]*parityVolume  `yaml:"volumes"`
+}
+
+// parityVolume is a top-level volume. Neither side labels its volumes; the
+// labels are read so a label on either side shows as a difference.
+type parityVolume struct {
+	Labels map[string]string `yaml:"labels"`
 }
 
 // keyRules says which keys a side of the parity check may hold: the keys
@@ -213,35 +219,6 @@ var intendedDifferences = []difference{
 			return true
 		},
 	},
-	{
-		name: "volume labels",
-		reason: "the CLI labels each volume with the version that created it " +
-			"(dev.tule.version), for its upgrade check; compose's volumes have no labels",
-		apply: func(c *paritySide) bool {
-			changed := false
-			for name, labels := range c.volumeLabels {
-				if labels != nil {
-					continue
-				}
-				svc := volumeOwner(name)
-				if svc == nil {
-					continue
-				}
-				c.volumeLabels[name] = map[string]string{LabelVersion: svc.Version}
-				changed = true
-			}
-			return changed
-		},
-	},
-}
-
-func volumeOwner(volume string) *catalog.Service {
-	for _, s := range catalog.All() {
-		if s.Volume == volume {
-			return s
-		}
-	}
-	return nil
 }
 
 func decodeParity(t *testing.T, data []byte) *paritySide {
