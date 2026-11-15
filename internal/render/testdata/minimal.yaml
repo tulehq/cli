@@ -1,7 +1,7 @@
 name: tule
 services:
   object-store:
-    image: ghcr.io/tulehq/object-store:0.13.0
+    image: ghcr.io/tulehq/object-store:0.13.1
     environment:
       TULE_Auth_AccessKeyID: AKIAIOSFODNN7EXAMPLE
       TULE_Auth_SecretAccessKey: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
@@ -17,4 +17,4 @@ services:
 volumes:
   objectdata:
     labels:
-      dev.tule.version: 0.13.0
+      dev.tule.version: 0.13.1

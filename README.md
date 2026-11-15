@@ -119,7 +119,7 @@ or the file `--config` names. Every key is optional:
 services: [object-store, queues, identity]  # default: every service but functions
 ports: {object-store: 9000}       # a service's API host port
 portOffset: 0                     # added to every default host port, for a second stack
-versions: {object-store: 0.13.0}  # default: the tested version; another one warns
+versions: {object-store: 0.13.1}  # default: the tested version; another one warns
 rootKey: {id: AKIAIOSFODNN7EXAMPLE, secret: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY}
 bind: 127.0.0.1                   # the address host ports are published on
 publicHost: localhost             # the host clients use: queue URLs and tule env
@@ -129,7 +129,7 @@ env: {object-store: {TULE_Server_Domain: localhost}}  # extra variables, set ove
 - Services named on the command line replace `services`.
 - `ports` sets a service's API port; functions' Runtime API port, 9061,
   moves with `portOffset` only.
-- `versions` takes release versions: `0.13.0`, or with a prerelease,
+- `versions` takes release versions: `0.13.1`, or with a prerelease,
   `0.14.0-rc.1`.
 - `rootKey` defaults to the AWS documentation's example key above. Its id
   and secret may hold only letters, digits and `+ / = . _ -`. The root key

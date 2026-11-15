@@ -125,14 +125,19 @@ func TestFunctionsPortsFollowTheOffset(t *testing.T) {
 }
 
 func TestVersionOverride(t *testing.T) {
-	cfg, warnings := mustParse(t, "versions: {object-store: 0.12.0, queues: 0.6.0}")
-	if len(warnings) != 1 || !strings.Contains(warnings[0], "object-store 0.12.0") ||
-		!strings.Contains(warnings[0], "0.13.0") {
-		t.Errorf("warnings = %v, want one naming object-store 0.12.0 and 0.13.0", warnings)
-	}
 	svc, err := catalog.Lookup("object-store")
 	if err != nil {
 		t.Fatal(err)
+	}
+	queues, err := catalog.Lookup("queues")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// queues is pinned at its tested version, so only object-store warns.
+	cfg, warnings := mustParse(t, "versions: {object-store: 0.12.0, queues: "+queues.Version+"}")
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "object-store 0.12.0") ||
+		!strings.Contains(warnings[0], svc.Version) {
+		t.Errorf("warnings = %v, want one naming object-store 0.12.0 and %s", warnings, svc.Version)
 	}
 	if got := cfg.Version(svc); got != "0.12.0" {
 		t.Errorf("Version() = %q, want the override", got)
