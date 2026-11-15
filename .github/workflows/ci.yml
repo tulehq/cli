@@ -46,6 +46,23 @@ jobs:
       - name: Build
         run: make build
 
+  e2e:
+    # Stacks from the released images on the runner's Docker daemon, with
+    # AWS SDK clients against them.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Docker Compose version
+        run: docker compose version
+
+      - name: End to end
+        run: make test-e2e
+
   spike:
     # Not a required check. It asks two questions of the runner's native
     # Linux Docker and logs the answers as FINDING lines; it fails only when

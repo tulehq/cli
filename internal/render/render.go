@@ -71,6 +71,11 @@ type Input struct {
 	Config *config.Config
 	// Docker is required when a selected service mounts the Docker socket.
 	Docker Docker
+	// VolumeVersions maps the key of each volume that already exists, such
+	// as queuesdata, to the dev.tule.version it was created with. Its label
+	// is rendered as created: compose asks to recreate a volume, deleting
+	// its data, when the labels it was created with change.
+	VolumeVersions map[string]string
 	// Stack is the project name.
 	Stack     string
 	Selection catalog.Selection
@@ -116,8 +121,12 @@ func Render(in Input) (*Project, error) {
 		}
 		p.Services[svc.Name] = s
 		if svc.Volume != "" {
+			version, ok := in.VolumeVersions[svc.Volume]
+			if !ok {
+				version = in.Config.Version(svc)
+			}
 			p.Volumes[svc.Volume] = Volume{Labels: map[string]string{
-				LabelVersion: escape(in.Config.Version(svc)),
+				LabelVersion: escape(version),
 			}}
 		}
 	}

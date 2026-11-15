@@ -191,6 +191,29 @@ func TestEnvOverridesWiring(t *testing.T) {
 	}
 }
 
+func TestExistingVolumesKeepTheirVersion(t *testing.T) {
+	cfg := parse(t, "")
+	p, err := Render(Input{
+		Stack:          "tule",
+		Config:         cfg,
+		Selection:      selection(t, catalog.Queues, catalog.ObjectStore),
+		VolumeVersions: map[string]string{"queuesdata": "0.5.0"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := p.Volumes["queuesdata"].Labels[LabelVersion]; got != "0.5.0" {
+		t.Errorf("queuesdata version = %q, want the one it was created with", got)
+	}
+	objectStore, err := catalog.Lookup(catalog.ObjectStore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := p.Volumes["objectdata"].Labels[LabelVersion]; got != objectStore.Version {
+		t.Errorf("objectdata version = %q, want %q", got, objectStore.Version)
+	}
+}
+
 func TestIPv6Bind(t *testing.T) {
 	cfg := parse(t, `bind: "::1"`)
 	p, err := Render(
