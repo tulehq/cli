@@ -1,0 +1,142 @@
+name: tule
+services:
+  accounts:
+    image: ghcr.io/tulehq/accounts:0.5.0
+    environment:
+      TULE_Auth_AccessKeyID: AKIAIOSFODNN7EXAMPLE
+      TULE_Auth_IdentityEndpoint: http://identity:9030
+      TULE_Auth_SecretAccessKey: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+    ports:
+      - 127.0.0.1:9020:9020
+    volumes:
+      - accountsdata:/data
+    labels:
+      dev.tule.config: ""
+      dev.tule.selection: identity,accounts,object-store,secret-store,mailbox,queues,console
+      dev.tule.service: accounts
+      dev.tule.stack: tule
+  console:
+    image: ghcr.io/tulehq/console:0.3.8
+    depends_on:
+      accounts:
+        condition: service_healthy
+      identity:
+        condition: service_healthy
+      mailbox:
+        condition: service_healthy
+      object-store:
+        condition: service_healthy
+      queues:
+        condition: service_healthy
+      secret-store:
+        condition: service_healthy
+    environment:
+      TULE_Console_AccountsEndpoint: http://accounts:9020
+      TULE_Console_IdentityEndpoint: http://identity:9030
+      TULE_Console_MailboxEndpoint: http://mailbox:9040
+      TULE_Console_ObjectStoreEndpoint: http://object-store:9000
+      TULE_Console_QueuesEndpoint: http://queues:9050
+      TULE_Console_SecretStoreEndpoint: http://secret-store:9010
+    ports:
+      - 127.0.0.1:9070:9070
+    labels:
+      dev.tule.config: ""
+      dev.tule.selection: identity,accounts,object-store,secret-store,mailbox,queues,console
+      dev.tule.service: console
+      dev.tule.stack: tule
+  identity:
+    image: ghcr.io/tulehq/identity:0.5.1
+    environment:
+      TULE_Auth_AccessKeyID: AKIAIOSFODNN7EXAMPLE
+      TULE_Auth_SecretAccessKey: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+      TULE_Identity_AccountsEndpoint: http://accounts:9020
+    ports:
+      - 127.0.0.1:9030:9030
+    volumes:
+      - identitydata:/data
+    labels:
+      dev.tule.config: ""
+      dev.tule.selection: identity,accounts,object-store,secret-store,mailbox,queues,console
+      dev.tule.service: identity
+      dev.tule.stack: tule
+  mailbox:
+    image: ghcr.io/tulehq/mailbox:0.4.0
+    environment:
+      TULE_Auth_AccessKeyID: AKIAIOSFODNN7EXAMPLE
+      TULE_Auth_IdentityEndpoint: http://identity:9030
+      TULE_Auth_SecretAccessKey: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+    ports:
+      - 127.0.0.1:9040:9040
+    volumes:
+      - maildata:/data
+    labels:
+      dev.tule.config: ""
+      dev.tule.selection: identity,accounts,object-store,secret-store,mailbox,queues,console
+      dev.tule.service: mailbox
+      dev.tule.stack: tule
+  object-store:
+    image: ghcr.io/tulehq/object-store:0.13.0
+    environment:
+      TULE_Auth_AccessKeyID: AKIAIOSFODNN7EXAMPLE
+      TULE_Auth_IdentityEndpoint: http://identity:9030
+      TULE_Auth_SecretAccessKey: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+      TULE_Storage_QueuesEndpoint: http://queues:9050
+    ports:
+      - 127.0.0.1:9000:9000
+    volumes:
+      - objectdata:/data
+    labels:
+      dev.tule.config: ""
+      dev.tule.selection: identity,accounts,object-store,secret-store,mailbox,queues,console
+      dev.tule.service: object-store
+      dev.tule.stack: tule
+  queues:
+    image: ghcr.io/tulehq/queues:0.6.0
+    environment:
+      TULE_Auth_AccessKeyID: AKIAIOSFODNN7EXAMPLE
+      TULE_Auth_IdentityEndpoint: http://identity:9030
+      TULE_Auth_SecretAccessKey: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+      TULE_Queues_BaseURL: http://localhost:9050
+    ports:
+      - 127.0.0.1:9050:9050
+    volumes:
+      - queuesdata:/data
+    labels:
+      dev.tule.config: ""
+      dev.tule.selection: identity,accounts,object-store,secret-store,mailbox,queues,console
+      dev.tule.service: queues
+      dev.tule.stack: tule
+  secret-store:
+    image: ghcr.io/tulehq/secret-store:0.6.0
+    environment:
+      TULE_Auth_AccessKeyID: AKIAIOSFODNN7EXAMPLE
+      TULE_Auth_IdentityEndpoint: http://identity:9030
+      TULE_Auth_SecretAccessKey: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+    ports:
+      - 127.0.0.1:9010:9010
+    volumes:
+      - secretdata:/data
+    labels:
+      dev.tule.config: ""
+      dev.tule.selection: identity,accounts,object-store,secret-store,mailbox,queues,console
+      dev.tule.service: secret-store
+      dev.tule.stack: tule
+volumes:
+  accountsdata:
+    labels:
+      dev.tule.version: 0.5.0
+  identitydata:
+    labels:
+      dev.tule.version: 0.5.1
+  maildata:
+    labels:
+      dev.tule.version: 0.4.0
+  objectdata:
+    labels:
+      dev.tule.version: 0.13.0
+  queuesdata:
+    labels:
+      dev.tule.version: 0.6.0
+  secretdata:
+    labels:
+      dev.tule.version: 0.6.0
