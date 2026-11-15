@@ -98,7 +98,16 @@ of the catalog services only, not other volumes in the compose project.
 
 `tule down` also removes the function containers functions left on the
 stack's network (`dev.tule.functions.instance`), as does `tule down
-functions`.
+functions`. Removing the whole stack, it removes functions first, so no
+invocation starts a function container while the network is taken down.
+
+On Ctrl-C, or when `tule` is stopped with a signal, `tule` passes the
+interrupt to compose and gives it a minute to exit before it is killed,
+then removes its temporary files. On Linux and macOS, compose runs in a
+process group of its own, which gets the interrupt whether or not the
+output is a terminal. On Windows, Ctrl-C in the console reaches compose
+directly, but a stop sent to `tule` alone does not: compose is killed
+once the minute has passed. This is not tested on Windows.
 
 ### tule logs, restart and reset
 
@@ -117,7 +126,8 @@ from any directory. `restart` restarts the containers as they are: it
 does not recreate them, so a changed `tule.yaml` is not applied (that is
 `up`), and their data stays. It then waits up to three minutes for each to
 be running and, when its image has a health check, healthy, and fails
-when one stops or turns unhealthy.
+when one stops or turns unhealthy. Ctrl-C ends `logs -f` with a zero exit
+status.
 
 `reset` removes the containers of the services named and their volumes,
 and starts them again with empty volumes; the other services keep running
@@ -182,11 +192,14 @@ stack. Only the Lambda API, 9060, is published.
 
 functions reaches the socket through the group that owns it, which `up`
 finds on the Docker daemon itself, with a throwaway container from the
-functions image (pulled for the stack anyway):
+functions image (pulled for the stack anyway), without a network:
 
 ```sh
-docker run --rm --entrypoint stat -v /var/run/docker.sock:/s ghcr.io/tulehq/functions:0.7.0 -c %g /s
+docker run --rm --network none --entrypoint stat -v /var/run/docker.sock:/s ghcr.io/tulehq/functions:0.7.0 -c %g /s
 ```
+
+It runs only once the plan is printed and `up` has checked for downgrades
+and busy host ports, so a refused `up` runs no container.
 
 The mount is made by the daemon, so the group is the socket's on the
 daemon's host: the Linux host, the VM inside Docker Desktop (whose group

@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"tule.dev/cli/internal/render"
@@ -151,13 +152,27 @@ func (c *Compose) composeTo(
 	defer func() { err = errors.Join(err, cleanup()) }()
 	//nolint:gosec // The arguments are tule's own; the stack name is validated.
 	cmd := exec.CommandContext(ctx, dockerBinary, composeArgs(p, envFile, verb...)...)
-	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
+	startInGroup(cmd)
+	// The deadline is set from exec's context watcher, and read once Run
+	// has returned.
+	var deadline atomic.Int64
+	cmd.Cancel = func() error {
+		deadline.Store(time.Now().Add(interruptGrace).UnixNano())
+		return interruptGroup(cmd)
+	}
 	cmd.WaitDelay = interruptGrace
 	cmd.Stdin = bytes.NewReader(data)
 	cmd.Stdout = stdout
 	cmd.Stderr = c.Out
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("docker compose %s: %w", verb[0], err)
+	runErr := cmd.Run()
+	if d := deadline.Load(); d != 0 {
+		// Interrupted: the plugin may still be exiting after docker.
+		if err := endGroup(cmd, time.Unix(0, d)); err != nil {
+			return errors.Join(fmt.Errorf("docker compose %s: %w", verb[0], runErr), err)
+		}
+	}
+	if runErr != nil {
+		return fmt.Errorf("docker compose %s: %w", verb[0], runErr)
 	}
 	return nil
 }
@@ -459,7 +474,7 @@ func (c *Compose) RemoveFunctionContainers(ctx context.Context, stack string) (i
 // it. The mount is made by the daemon, so the answer is the socket's group
 // on the daemon's host: inside Docker Desktop's VM, or on a remote host.
 func (c *Compose) SocketGroup(ctx context.Context, image, socketPath string) (string, error) {
-	out, err := c.output(ctx, "run", "--rm", "--entrypoint", "stat",
+	out, err := c.output(ctx, "run", "--rm", "--network", "none", "--entrypoint", "stat",
 		"--volume", socketPath+":/s", image, "-c", "%g", "/s")
 	if err != nil {
 		return "", fmt.Errorf("find the Docker socket's group: %w", err)

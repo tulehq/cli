@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -34,10 +36,12 @@ func newLogsCommand(g *globals) *cobra.Command {
 			}
 			opts.Services = args
 			opts.Out = cmd.OutOrStdout()
-			if err := rt.Logs(cmd.Context(), stateProject(st), opts); err != nil {
-				return err //nolint:wrapcheck // The runtime says what failed.
+			err = rt.Logs(cmd.Context(), stateProject(st), opts)
+			if err != nil && errors.Is(cmd.Context().Err(), context.Canceled) {
+				// Ctrl-C, or a stop, is how logs -f ends.
+				return nil
 			}
-			return nil
+			return err //nolint:wrapcheck // The runtime says what failed.
 		},
 	}
 	cmd.Flags().BoolVarP(&opts.Follow, "follow", "f", false, "keep printing new output")

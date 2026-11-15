@@ -1,11 +1,17 @@
 package cli
 
 import (
+	"context"
 	"errors"
+	"io"
+	"net"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/spf13/cobra"
 
 	"tule.dev/cli/internal/catalog"
 	"tule.dev/cli/internal/runtime"
@@ -275,5 +281,74 @@ func TestEnvReadBackSkipsAStoppedService(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "queues publishes no API port (its container is exited)") {
 		t.Errorf("stderr = %q", stderr)
+	}
+}
+
+func TestLogsEndedByASignalIsClean(t *testing.T) {
+	rt, _ := upStack(t, "", "queues")
+	t.Chdir(t.TempDir())
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	root := newRootCommand(
+		func(io.Writer) runtime.Runtime { return rt },
+		func() bool { return false },
+	)
+	root.SetOut(io.Discard)
+	root.SetErr(io.Discard)
+	root.SetArgs([]string{"logs", "-f"})
+	if err := root.ExecuteContext(ctx); err != nil {
+		t.Errorf("logs -f ended by a signal = %v, want a clean exit", err)
+	}
+}
+
+func TestPromptReturnsOnInterrupt(t *testing.T) {
+	stdin, w := io.Pipe() // Never written: the read blocks.
+	t.Cleanup(func() { _ = w.Close() })
+	ctx, cancel := context.WithCancel(t.Context())
+	cmd := &cobra.Command{}
+	cmd.SetContext(ctx)
+	cmd.SetIn(stdin)
+	done := make(chan error, 1)
+	go func() {
+		_, err := readAnswer(cmd)
+		done <- err
+	}()
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, errResetNotConfirmed) || !errors.Is(err, context.Canceled) {
+			t.Errorf("readAnswer() = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the prompt did not return on the interrupt")
+	}
+}
+
+func TestRefusedUpDoesNotProbe(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = l.Close() }()
+	port := strconv.Itoa(l.Addr().(*net.TCPAddr).Port)
+	rt := &fakeRuntime{socketGroup: "989"}
+	dir := writeConfig(t, freePorts(t)+"ports: {functions: "+port+"}\n")
+	if _, err = runWith(t, rt, dir, "up", "functions"); err == nil ||
+		!strings.Contains(err.Error(), "ports: {functions: <port>}") {
+		t.Errorf("up functions on a busy port = %v", err)
+	}
+	if rt.probes != 0 || len(rt.ups) != 0 {
+		t.Errorf("the refused up probed %d times and ran up %d times", rt.probes, len(rt.ups))
+	}
+}
+
+func TestDownStackStopsFunctionsFirst(t *testing.T) {
+	rt, _ := upStack(t, "", "functions", "queues")
+	rt.functions = 1
+	if _, err := runWith(t, rt, t.TempDir(), "down"); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(rt.calls, []string{"rm functions", "down"}) {
+		t.Errorf("calls = %v; want functions removed, then compose down", rt.calls)
 	}
 }

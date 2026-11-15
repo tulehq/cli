@@ -59,8 +59,7 @@ func (g *globals) downStack(
 	if err := warnRemovingConflict(cmd, st); err != nil {
 		return err
 	}
-	// They hold the stack's network, which compose removes next.
-	if err := removeFunctionContainers(cmd, rt, g.stack); err != nil {
+	if err := removeFunctions(cmd, rt, st); err != nil {
 		return err
 	}
 	if st.Running() {
@@ -87,6 +86,19 @@ func (g *globals) downStack(
 	default:
 		return writeLine(cmd, "stack "+g.stack+" has no containers")
 	}
+}
+
+// removeFunctions removes functions, then the function containers it left.
+// functions goes first, so it starts no function container after the sweep:
+// they hold the stack's network, which compose down removes next.
+func removeFunctions(cmd *cobra.Command, rt runtime.Runtime, st *stack.State) error {
+	if _, ok := st.Containers[catalog.Functions]; ok {
+		err := rt.RemoveServices(cmd.Context(), stateProject(st), []string{catalog.Functions})
+		if err != nil {
+			return err //nolint:wrapcheck // The runtime says what failed.
+		}
+	}
+	return removeFunctionContainers(cmd, rt, st.Name)
 }
 
 // warnRemovingConflict warns of a stack whose containers were created from

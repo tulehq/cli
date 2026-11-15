@@ -150,7 +150,8 @@ type applyOptions struct {
 
 // apply renders the selection, prints what it changes in the stack, checks
 // no running service goes down a version and the host ports are free, and
-// brings the stack to it.
+// brings the stack to it. The Docker socket's group is probed, which runs a
+// container, only once those checks pass.
 func (g *globals) apply(
 	cmd *cobra.Command,
 	rt runtime.Runtime,
@@ -159,27 +160,53 @@ func (g *globals) apply(
 	sel catalog.Selection,
 	opts applyOptions,
 ) error {
-	docker, err := g.docker(cmd, rt, cfg, st, sel, opts.dockerGID)
+	docker, probe := knownDocker(st, sel, opts.dockerGID)
+	planned := docker
+	if probe {
+		// functions is added, so the plan does not compare its group.
+		planned.GroupID = plannedGroup
+	}
+	project, err := g.render(cfg, sel, planned)
 	if err != nil {
 		return err
-	}
-	project, err := render.Render(render.Input{
-		Stack:     g.stack,
-		Config:    cfg,
-		Selection: sel,
-		Docker:    docker,
-	})
-	if err != nil {
-		return fmt.Errorf("render the stack: %w", err)
 	}
 	bindings, err := stack.Bindings(cfg, sel)
 	if err != nil {
 		return err //nolint:wrapcheck // Says which ports.
 	}
 	plan := stack.NewPlan(st, project, bindings)
-	if err := plan.Write(cmd.OutOrStdout()); err != nil {
+	if err = plan.Write(cmd.OutOrStdout()); err != nil {
 		return err //nolint:wrapcheck // Says what failed.
 	}
+	if err = checkPlan(cmd, plan, bindings, st, opts); err != nil {
+		return err
+	}
+	if probe {
+		if docker.GroupID, err = probeGroup(cmd, rt, cfg); err != nil {
+			return err
+		}
+		if project, err = g.render(cfg, sel, docker); err != nil {
+			return err
+		}
+	}
+	if err := rt.Up(cmd.Context(), project); err != nil {
+		return err //nolint:wrapcheck // The runtime says what failed.
+	}
+	return nil
+}
+
+// plannedGroup stands in for the socket's group until it is probed.
+const plannedGroup = "0"
+
+// checkPlan refuses a downgrade unless allowed, and host ports in use
+// unless the check is skipped.
+func checkPlan(
+	cmd *cobra.Command,
+	plan stack.Plan,
+	bindings []stack.Binding,
+	st *stack.State,
+	opts applyOptions,
+) error {
 	if !opts.allowDowngrade {
 		if err := plan.CheckDowngrades(); err != nil {
 			return fmt.Errorf("%w; run tule up --allow-downgrade to go ahead", err)
@@ -190,39 +217,76 @@ func (g *globals) apply(
 			return err //nolint:wrapcheck // Names the ports and the keys that move them.
 		}
 	}
-	if err := rt.Up(cmd.Context(), project); err != nil {
-		return err //nolint:wrapcheck // The runtime says what failed.
-	}
 	return nil
 }
 
-// docker is how functions reaches the Docker daemon, when it is selected:
-// the socket, and its group from --docker-gid, else from the running
-// functions container, so a re-render keeps the group it was started with,
-// else probed on the daemon from the functions image.
+// render renders the selection with docker for functions.
+func (g *globals) render(
+	cfg *config.Config,
+	sel catalog.Selection,
+	docker render.Docker,
+) (*render.Project, error) {
+	project, err := render.Render(render.Input{
+		Stack:     g.stack,
+		Config:    cfg,
+		Selection: sel,
+		Docker:    docker,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("render the stack: %w", err)
+	}
+	return project, nil
+}
+
+// knownDocker is how functions reaches the Docker daemon, when it is
+// selected: the socket, and its group from --docker-gid, else from the
+// running functions container, so a re-render keeps the group it was
+// started with. probe is true when neither gives the group.
+func knownDocker(
+	st *stack.State,
+	sel catalog.Selection,
+	flagGID string,
+) (docker render.Docker, probe bool) {
+	docker = render.Docker{SocketPath: dockerSocket, GroupID: flagGID}
+	if !sel.Has(catalog.Functions) || flagGID != "" {
+		return docker, false
+	}
+	if c, ok := st.Containers[catalog.Functions]; ok && len(c.GroupAdd) == 1 {
+		docker.GroupID = c.GroupAdd[0]
+		return docker, false
+	}
+	return docker, true
+}
+
+// docker is knownDocker, with the group probed when it is not known.
 func (g *globals) docker(
 	cmd *cobra.Command,
 	rt runtime.Runtime,
 	cfg *config.Config,
 	st *stack.State,
 	sel catalog.Selection,
-	flagGID string,
 ) (render.Docker, error) {
-	docker := render.Docker{SocketPath: dockerSocket, GroupID: flagGID}
-	if !sel.Has(catalog.Functions) || flagGID != "" {
+	docker, probe := knownDocker(st, sel, "")
+	if !probe {
 		return docker, nil
 	}
-	if c, ok := st.Containers[catalog.Functions]; ok && len(c.GroupAdd) == 1 {
-		docker.GroupID = c.GroupAdd[0]
-		return docker, nil
-	}
-	image := functionsService.ImageRef(cfg.Version(functionsService))
-	gid, err := rt.SocketGroup(cmd.Context(), image, dockerSocket)
+	gid, err := probeGroup(cmd, rt, cfg)
 	if err != nil {
-		return render.Docker{}, fmt.Errorf("%w; pass --docker-gid to set it", err)
+		return render.Docker{}, err
 	}
 	docker.GroupID = gid
 	return docker, nil
+}
+
+// probeGroup finds the socket's group on the daemon from the functions
+// image.
+func probeGroup(cmd *cobra.Command, rt runtime.Runtime, cfg *config.Config) (string, error) {
+	image := functionsService.ImageRef(cfg.Version(functionsService))
+	gid, err := rt.SocketGroup(cmd.Context(), image, dockerSocket)
+	if err != nil {
+		return "", fmt.Errorf("%w; pass --docker-gid to set it", err)
+	}
+	return gid, nil
 }
 
 // writeLine prints a line to standard output.

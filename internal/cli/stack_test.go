@@ -60,6 +60,7 @@ func (f *fakeRuntime) Up(_ context.Context, p *render.Project) error {
 
 func (f *fakeRuntime) Down(_ context.Context, p *render.Project, opts runtime.DownOptions) error {
 	f.downs = append(f.downs, p)
+	f.calls = append(f.calls, "down")
 	f.downVolumes = opts.Volumes
 	f.containers = nil
 	if opts.Volumes {
@@ -102,8 +103,12 @@ func (f *fakeRuntime) RemoveServices(
 	return nil
 }
 
-func (f *fakeRuntime) Logs(_ context.Context, p *render.Project, opts runtime.LogsOptions) error {
+func (f *fakeRuntime) Logs(ctx context.Context, p *render.Project, opts runtime.LogsOptions) error {
 	f.calls = append(f.calls, "logs "+strings.Join(logsFlags(opts), " "))
+	if ctx.Err() != nil {
+		// As compose ends on the interrupt.
+		return fmt.Errorf("docker compose logs: %w", ctx.Err())
+	}
 	services := strings.Join(slices.Sorted(maps.Keys(p.Services)), ",")
 	if _, err := io.WriteString(opts.Out, "logs of "+services+"\n"); err != nil {
 		return fmt.Errorf("write the logs: %w", err)

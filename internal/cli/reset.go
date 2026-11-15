@@ -92,17 +92,11 @@ func (g *globals) renderRunning(
 	if err != nil {
 		return nil, err //nolint:wrapcheck // Says which stack.
 	}
-	docker, err := g.docker(cmd, rt, cfg, st, sel, "")
+	docker, err := g.docker(cmd, rt, cfg, st, sel)
 	if err != nil {
 		return nil, err
 	}
-	project, err := render.Render(render.Input{
-		Stack: g.stack, Config: cfg, Selection: sel, Docker: docker,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("render the stack: %w", err)
-	}
-	return project, nil
+	return g.render(cfg, sel, docker)
 }
 
 // recreateEmpty removes the services' containers, and functions' function
@@ -130,6 +124,30 @@ func (g *globals) recreateEmpty(
 		return err //nolint:wrapcheck // The runtime says what failed.
 	}
 	return nil
+}
+
+// readAnswer reads a line from standard input, or stops when the command's
+// context is done, as on Ctrl-C. The read is left blocked then; tule exits
+// right after.
+func readAnswer(cmd *cobra.Command) (string, error) {
+	type line struct {
+		err  error
+		text string
+	}
+	read := make(chan line, 1)
+	go func() {
+		text, err := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
+		read <- line{text: text, err: err}
+	}()
+	select {
+	case <-cmd.Context().Done():
+		return "", fmt.Errorf("%w: %w", errResetNotConfirmed, cmd.Context().Err())
+	case l := <-read:
+		if l.err != nil && !errors.Is(l.err, io.EOF) {
+			return "", fmt.Errorf("read the answer: %w", l.err)
+		}
+		return l.text, nil
+	}
 }
 
 // resetVolumes returns the services named, in catalog order without
@@ -164,9 +182,9 @@ func (g *globals) confirmReset(cmd *cobra.Command, names, volumes []string) erro
 	if _, err := io.WriteString(cmd.ErrOrStderr(), question); err != nil {
 		return fmt.Errorf("ask: %w", err)
 	}
-	answer, err := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
-		return fmt.Errorf("read the answer: %w", err)
+	answer, err := readAnswer(cmd)
+	if err != nil {
+		return err
 	}
 	switch strings.ToLower(strings.TrimSpace(answer)) {
 	case "y", "yes":

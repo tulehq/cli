@@ -107,6 +107,34 @@ func loggedEnvFile(log string) string {
 	return ""
 }
 
+// TestInterruptReachesThePlugin stands docker in for a CLI that does not
+// pass the interrupt on, as docker does not when its output is a terminal:
+// the plugin it runs, a process of its own, must get it from tule.
+func TestInterruptReachesThePlugin(t *testing.T) {
+	log := fakeDocker(t, `
+export LOG
+sh -c 'trap "echo plugin-interrupted >> \"\$LOG\"; exit 130" INT
+echo started >> "$LOG"
+while :; do sleep 0.05; done'
+`)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		done <- NewCompose(io.Discard).Up(ctx, &render.Project{Name: "tule"})
+	}()
+	waitForLine(t, log, "started")
+	cancel()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("Up() = nil after an interrupt")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Up() did not return after an interrupt")
+	}
+	waitForLine(t, log, "plugin-interrupted")
+}
+
 func TestSocketGroup(t *testing.T) {
 	log := fakeDocker(t, `echo "$*" >> "$LOG"; echo 989`)
 	gid, err := NewCompose(io.Discard).SocketGroup(
@@ -117,7 +145,7 @@ func TestSocketGroup(t *testing.T) {
 	if gid != "989" {
 		t.Errorf("SocketGroup() = %q, want 989", gid)
 	}
-	want := "run --rm --entrypoint stat --volume /var/run/docker.sock:/s " +
+	want := "run --rm --network none --entrypoint stat --volume /var/run/docker.sock:/s " +
 		"ghcr.io/tulehq/functions:0.7.0 -c %g /s\n"
 	if got := readLog(t, log); got != want {
 		t.Errorf("docker ran with\n%q\nwant\n%q", got, want)
