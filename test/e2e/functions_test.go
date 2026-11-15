@@ -134,7 +134,9 @@ func checkUpFunctions(t *testing.T, a *stackDir) {
 	}
 	t.Cleanup(func() {
 		if t.Failed() {
-			t.Logf("functions' logs:\n%s", docker(t, "logs", "--tail", "100", functions))
+			// t.Context is already canceled when cleanups run.
+			logs, err := dockerCommand("logs", "--tail", "100", functions).CombinedOutput()
+			t.Logf("functions' logs (%v):\n%s", err, logs)
 		}
 	})
 	ctx := t.Context()
