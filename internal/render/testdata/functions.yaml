@@ -27,7 +27,7 @@ services:
       dev.tule.service: functions
       dev.tule.stack: second
   identity:
-    image: ghcr.io/tulehq/identity:0.5.1
+    image: ghcr.io/tulehq/identity:0.5.2
     environment:
       TULE_Auth_AccessKeyID: AKIAMYOWNKEY0000
       TULE_Auth_SecretAccessKey: own+secret/key=
@@ -41,7 +41,7 @@ services:
       dev.tule.service: identity
       dev.tule.stack: second
   queues:
-    image: ghcr.io/tulehq/queues:0.6.0
+    image: ghcr.io/tulehq/queues:0.6.1
     environment:
       TULE_Auth_AccessKeyID: AKIAMYOWNKEY0000
       TULE_Auth_IdentityEndpoint: http://identity:9030
@@ -62,7 +62,7 @@ volumes:
       dev.tule.version: 0.6.1
   identitydata:
     labels:
-      dev.tule.version: 0.5.1
+      dev.tule.version: 0.5.2
   queuesdata:
     labels:
-      dev.tule.version: 0.6.0
+      dev.tule.version: 0.6.1

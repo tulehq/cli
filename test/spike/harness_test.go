@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	objectStoreImage = "ghcr.io/tulehq/object-store:0.13.0"
+	objectStoreImage = "ghcr.io/tulehq/object-store:0.13.1"
 	probeImage       = "alpine:3.24"
 	accessKey        = "test"
 	secretKey        = "test"

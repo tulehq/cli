@@ -28,11 +28,10 @@ jobs:
         run: make test
 
       - name: Parity with console's compose.yaml
-        # Compares the catalog with console's compose.yaml at a pinned ref.
-        # This is console main's commit for now; it moves to the console tag
-        # that ships this compose file.
+        # Compares the catalog with console's compose.yaml at the console
+        # release whose pins this catalog ships.
         env:
-          CONSOLE_REF: 06c670f1fb18132840e60be28abe145e0779e8cb
+          CONSOLE_REF: v0.3.9
         shell: bash
         run: |
           compose="$RUNNER_TEMP/console-compose.yaml"

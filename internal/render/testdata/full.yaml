@@ -1,7 +1,7 @@
 name: tule
 services:
   accounts:
-    image: ghcr.io/tulehq/accounts:0.5.0
+    image: ghcr.io/tulehq/accounts:0.5.1
     environment:
       TULE_Auth_AccessKeyID: AKIAIOSFODNN7EXAMPLE
       TULE_Auth_IdentityEndpoint: http://identity:9030
@@ -16,7 +16,7 @@ services:
       dev.tule.service: accounts
       dev.tule.stack: tule
   console:
-    image: ghcr.io/tulehq/console:0.3.8
+    image: ghcr.io/tulehq/console:0.3.9
     depends_on:
       accounts:
         condition: service_healthy
@@ -69,7 +69,7 @@ services:
       dev.tule.service: functions
       dev.tule.stack: tule
   identity:
-    image: ghcr.io/tulehq/identity:0.5.1
+    image: ghcr.io/tulehq/identity:0.5.2
     environment:
       TULE_Auth_AccessKeyID: AKIAIOSFODNN7EXAMPLE
       TULE_Auth_SecretAccessKey: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
@@ -84,7 +84,7 @@ services:
       dev.tule.service: identity
       dev.tule.stack: tule
   mailbox:
-    image: ghcr.io/tulehq/mailbox:0.4.0
+    image: ghcr.io/tulehq/mailbox:0.4.1
     environment:
       TULE_Auth_AccessKeyID: AKIAIOSFODNN7EXAMPLE
       TULE_Auth_IdentityEndpoint: http://identity:9030
@@ -99,7 +99,7 @@ services:
       dev.tule.service: mailbox
       dev.tule.stack: tule
   object-store:
-    image: ghcr.io/tulehq/object-store:0.13.0
+    image: ghcr.io/tulehq/object-store:0.13.1
     environment:
       TULE_Auth_AccessKeyID: AKIAIOSFODNN7EXAMPLE
       TULE_Auth_IdentityEndpoint: http://identity:9030
@@ -116,7 +116,7 @@ services:
       dev.tule.service: object-store
       dev.tule.stack: tule
   queues:
-    image: ghcr.io/tulehq/queues:0.6.0
+    image: ghcr.io/tulehq/queues:0.6.1
     environment:
       TULE_Auth_AccessKeyID: AKIAIOSFODNN7EXAMPLE
       TULE_Auth_IdentityEndpoint: http://identity:9030
@@ -132,7 +132,7 @@ services:
       dev.tule.service: queues
       dev.tule.stack: tule
   secret-store:
-    image: ghcr.io/tulehq/secret-store:0.6.0
+    image: ghcr.io/tulehq/secret-store:0.6.1
     environment:
       TULE_Auth_AccessKeyID: AKIAIOSFODNN7EXAMPLE
       TULE_Auth_IdentityEndpoint: http://identity:9030
@@ -150,22 +150,22 @@ services:
 volumes:
   accountsdata:
     labels:
-      dev.tule.version: 0.5.0
+      dev.tule.version: 0.5.1
   functionsdata:
     labels:
       dev.tule.version: 0.6.1
   identitydata:
     labels:
-      dev.tule.version: 0.5.1
+      dev.tule.version: 0.5.2
   maildata:
     labels:
-      dev.tule.version: 0.4.0
+      dev.tule.version: 0.4.1
   objectdata:
     labels:
-      dev.tule.version: 0.13.0
+      dev.tule.version: 0.13.1
   queuesdata:
     labels:
-      dev.tule.version: 0.6.0
+      dev.tule.version: 0.6.1
   secretdata:
     labels:
-      dev.tule.version: 0.6.0
+      dev.tule.version: 0.6.1
