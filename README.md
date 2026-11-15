@@ -10,13 +10,27 @@ file in [tulehq/console](https://github.com/tulehq/console).
 
 ## Install
 
-Once v0.1.0 is out, this will work:
+With Go installed:
 
 ```sh
 go install tule.dev/cli/cmd/tule@latest
 ```
 
-Then `tule version` prints the version you installed.
+Or download the archive for your platform from the
+[releases page](https://github.com/tulehq/cli/releases), with
+`SHA256SUMS` from the same release, and check it before unpacking:
+
+```sh
+grep tule_v0.1.0_linux_amd64.tar.gz SHA256SUMS | sha256sum --check   # macOS: shasum -a 256 --check
+tar -xzf tule_v0.1.0_linux_amd64.tar.gz
+```
+
+Archives are named `tule_<version>_<os>_<arch>`, for linux, darwin and
+windows on amd64 and arm64; the windows ones are zip files. Each holds the
+`tule` binary, this README and the license. Put the binary on your `PATH`.
+
+Then `tule version` prints the version you installed and the image of each
+service it runs.
 
 ## Commands
 
@@ -35,7 +49,7 @@ v2 plugin, which Docker Desktop includes and Linux installs as the
 | `tule services` | Lists the catalog: each service, the AWS service it stands in for, its image and tested version, its default ports |
 | `tule compose [service...] [-o file]` | Writes the compose file for the services named, or the configured ones, or the default set: every service but functions |
 | `tule env [--shell sh\|fish\|powershell]` | Prints the credentials, region and endpoint variables that point AWS SDKs and the AWS CLI at the running stack, or at the configured services when none runs |
-| `tule version` | Prints the version |
+| `tule version` | Prints the version, and the image and version of each service in the catalog |
 
 Every command takes `--stack <name>` (default `tule`), the compose project
 name that namespaces containers, network and volumes, and `--config
