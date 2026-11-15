@@ -31,7 +31,7 @@ jobs:
         # Compares the catalog with console's compose.yaml at the console
         # release whose pins this catalog ships.
         env:
-          CONSOLE_REF: v0.3.10
+          CONSOLE_REF: v0.3.11
         shell: bash
         run: |
           compose="$RUNNER_TEMP/console-compose.yaml"

@@ -174,6 +174,10 @@ func paritySelection() []string { return catalog.Names() }
 // parityStack is the stack the render is compared as.
 const parityStack = "tule"
 
+// composeProjectName is the interpolation of the project name compose
+// sets, as console's compose.yaml writes it.
+const composeProjectName = "${COMPOSE_PROJECT_NAME}"
+
 // parityDocker is what the render is given for the socket: the socket compose
 // mounts, and group 0, what compose's ${DOCKER_GID:-0} is when unset.
 var parityDocker = Docker{SocketPath: "/var/run/docker.sock", GroupID: "0"}
@@ -209,31 +213,23 @@ var intendedDifferences = []difference{
 		},
 	},
 	{
-		// Follow-up: console's compose.yaml attaches the function containers
-		// to its network too. When it does, this entry no longer applies and
-		// fails, and is removed.
-		name: "functions on the stack network",
-		reason: "the CLI attaches the function containers to the stack network " +
-			"(TULE_Functions_ContainerNetwork, functions 0.7.0), where they reach the " +
-			"Runtime API at functions:9061, so it does not publish 9061; console's " +
-			"compose.yaml still has them call host.docker.internal:9061",
+		name: "COMPOSE_PROJECT_NAME interpolation",
+		reason: "compose sets COMPOSE_PROJECT_NAME to the project's name for " +
+			"interpolation, and console names functions' network with it; the CLI " +
+			"writes the stack's network by name. The check gives it the stack the " +
+			"render is compared as. Only that variable, written exactly so, is " +
+			"substituted: any other $ in a value stays a difference",
 		apply: func(c *paritySide) bool {
-			s := c.services[catalog.Functions]
-			if s == nil {
-				return false
+			changed := false
+			for _, svc := range c.services {
+				for k, v := range svc.Environment {
+					if strings.Contains(v, composeProjectName) {
+						svc.Environment[k] = strings.ReplaceAll(v, composeProjectName, parityStack)
+						changed = true
+					}
+				}
 			}
-			if _, ok := s.Environment["TULE_Functions_ContainerNetwork"]; ok {
-				return false
-			}
-			runtime := slices.Index(s.Ports, "127.0.0.1:9061:9061")
-			if runtime < 0 {
-				return false
-			}
-			s.Ports = slices.Delete(s.Ports, runtime, runtime+1)
-			s.Environment["TULE_Functions_ContainerNetwork"] = NetworkName(parityStack)
-			s.Environment["TULE_Functions_RuntimeAPIHost"] = catalog.Functions
-			s.Environment["TULE_Functions_RuntimeAPIBind"] = "0.0.0.0"
-			return true
+			return changed
 		},
 	},
 	{
