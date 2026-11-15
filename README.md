@@ -5,8 +5,14 @@ stack: the drop-in replacements for AWS services (object-store for S3,
 queues for SQS, and the rest) that Tule publishes as images. It renders a
 compose file for the services you pick and runs it with `docker compose`.
 
-**Status: under construction.** Until it ships, run a stack with the compose
-file in [tulehq/console](https://github.com/tulehq/console).
+**Status: first release.** Every command below is in v0.1.0 and is tested
+on Linux with the native Docker daemon. Not tested yet: the signal
+handling on Windows (see [up, down and
+status](#tule-up-down-and-status)), and the probe that finds the Docker
+socket's group for functions (see [functions](#functions)) on Docker
+Desktop, on macOS and on remote daemons. The compose file in
+[tulehq/console](https://github.com/tulehq/console) remains a way to run
+a stack without `tule`.
 
 ## Install
 
