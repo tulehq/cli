@@ -1,0 +1,68 @@
+name: second
+services:
+  functions:
+    image: ghcr.io/tulehq/functions:0.6.1
+    depends_on:
+      queues:
+        condition: service_healthy
+    environment:
+      TULE_Auth_AccessKeyID: AKIAMYOWNKEY0000
+      TULE_Auth_IdentityEndpoint: http://identity:9030
+      TULE_Auth_SecretAccessKey: own+secret/key=
+      TULE_Example: pa$$$$word
+      TULE_Functions_PullImages: "true"
+      TULE_Functions_QueuesEndpoint: http://queues:9050
+      TULE_Functions_RuntimeAPIPort: "9161"
+    ports:
+      - 0.0.0.0:9160:9060
+      - 0.0.0.0:9161:9161
+    volumes:
+      - functionsdata:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    group_add:
+      - "989"
+    labels:
+      dev.tule.config: ""
+      dev.tule.selection: identity,queues,functions
+      dev.tule.service: functions
+      dev.tule.stack: second
+  identity:
+    image: ghcr.io/tulehq/identity:0.5.1
+    environment:
+      TULE_Auth_AccessKeyID: AKIAMYOWNKEY0000
+      TULE_Auth_SecretAccessKey: own+secret/key=
+    ports:
+      - 0.0.0.0:9130:9030
+    volumes:
+      - identitydata:/data
+    labels:
+      dev.tule.config: ""
+      dev.tule.selection: identity,queues,functions
+      dev.tule.service: identity
+      dev.tule.stack: second
+  queues:
+    image: ghcr.io/tulehq/queues:0.6.0
+    environment:
+      TULE_Auth_AccessKeyID: AKIAMYOWNKEY0000
+      TULE_Auth_IdentityEndpoint: http://identity:9030
+      TULE_Auth_SecretAccessKey: own+secret/key=
+      TULE_Queues_BaseURL: http://dev.example:19050
+    ports:
+      - 0.0.0.0:19050:9050
+    volumes:
+      - queuesdata:/data
+    labels:
+      dev.tule.config: ""
+      dev.tule.selection: identity,queues,functions
+      dev.tule.service: queues
+      dev.tule.stack: second
+volumes:
+  functionsdata:
+    labels:
+      dev.tule.version: 0.6.1
+  identitydata:
+    labels:
+      dev.tule.version: 0.5.1
+  queuesdata:
+    labels:
+      dev.tule.version: 0.6.0

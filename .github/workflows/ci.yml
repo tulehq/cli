@@ -27,6 +27,23 @@ jobs:
       - name: Unit tests
         run: make test
 
+      - name: Parity with console's compose.yaml
+        # Compares the catalog with console's compose.yaml at a pinned ref.
+        # This is console main's commit for now; it moves to the console tag
+        # that ships this compose file.
+        env:
+          CONSOLE_REF: 06c670f1fb18132840e60be28abe145e0779e8cb
+        shell: bash
+        run: |
+          compose="$RUNNER_TEMP/console-compose.yaml"
+          curl -fsSL -o "$compose" \
+            "https://raw.githubusercontent.com/tulehq/console/$CONSOLE_REF/compose.yaml"
+          TULE_CONSOLE_COMPOSE="$compose" go test -count=1 -v \
+            -run '^TestParityWithConsoleCompose$' ./internal/render/ \
+            | tee "$RUNNER_TEMP/parity.out"
+          # A skip or a test renamed out of -run would pass silently.
+          grep -q '^--- PASS: TestParityWithConsoleCompose' "$RUNNER_TEMP/parity.out"
+
       - name: Build
         run: make build
 
