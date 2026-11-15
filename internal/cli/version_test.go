@@ -3,7 +3,10 @@ package cli
 import (
 	"bytes"
 	"runtime/debug"
+	"strings"
 	"testing"
+
+	"tule.dev/cli/internal/catalog"
 )
 
 func TestVersionString(t *testing.T) {
@@ -64,6 +67,27 @@ func TestVersionString(t *testing.T) {
 	}
 }
 
+func TestWriteVersion(t *testing.T) {
+	services := []*catalog.Service{
+		{Name: "object-store", Image: "ghcr.io/tulehq/object-store", Version: "0.4.2"},
+		{Name: "queues", Image: "ghcr.io/tulehq/queues", Version: "0.3.0"},
+	}
+	info := &debug.BuildInfo{Main: debug.Module{Version: "v0.1.0"}}
+	var out bytes.Buffer
+
+	if err := writeVersion(&out, info, services); err != nil {
+		t.Fatalf("writeVersion() error = %v", err)
+	}
+	want := "tule v0.1.0\n" +
+		"\n" +
+		"SERVICE       IMAGE\n" +
+		"object-store  ghcr.io/tulehq/object-store:0.4.2\n" +
+		"queues        ghcr.io/tulehq/queues:0.3.0\n"
+	if got := out.String(); got != want {
+		t.Errorf("output =\n%s\nwant\n%s", got, want)
+	}
+}
+
 func TestVersionCommandPrints(t *testing.T) {
 	cmd := newVersionCommand(func() (*debug.BuildInfo, bool) {
 		return &debug.BuildInfo{Main: debug.Module{Version: "v0.1.0"}}, true
@@ -75,8 +99,17 @@ func TestVersionCommandPrints(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	if got, want := out.String(), "tule v0.1.0\n"; got != want {
-		t.Errorf("output = %q, want %q", got, want)
+	got := out.String()
+	if !strings.HasPrefix(got, "tule v0.1.0\n\nSERVICE") {
+		t.Errorf("output = %q, want the version line, a blank line and the service table", got)
+	}
+	for _, svc := range catalog.All() {
+		if line := svc.Name + " "; !strings.Contains(got, "\n"+line) {
+			t.Errorf("output = %q, want a line for %s", got, svc.Name)
+		}
+		if ref := svc.ImageRef(svc.Version) + "\n"; !strings.Contains(got, ref) {
+			t.Errorf("output = %q, want %q", got, ref)
+		}
 	}
 }
 

@@ -5,18 +5,38 @@ stack: the drop-in replacements for AWS services (object-store for S3,
 queues for SQS, and the rest) that Tule publishes as images. It renders a
 compose file for the services you pick and runs it with `docker compose`.
 
-**Status: under construction.** Until it ships, run a stack with the compose
-file in [tulehq/console](https://github.com/tulehq/console).
+**Status: first release.** Every command below is in v0.1.0 and is tested
+on Linux with the native Docker daemon. Not tested yet: the signal
+handling on Windows (see [up, down and
+status](#tule-up-down-and-status)), and the probe that finds the Docker
+socket's group for functions (see [functions](#functions)) on Docker
+Desktop, on macOS and on remote daemons. The compose file in
+[tulehq/console](https://github.com/tulehq/console) remains a way to run
+a stack without `tule`.
 
 ## Install
 
-Once v0.1.0 is out, this will work:
+With Go installed:
 
 ```sh
 go install tule.dev/cli/cmd/tule@latest
 ```
 
-Then `tule version` prints the version you installed.
+Or download the archive for your platform from the
+[releases page](https://github.com/tulehq/cli/releases), with
+`SHA256SUMS` from the same release, and check it before unpacking:
+
+```sh
+grep tule_v0.1.0_linux_amd64.tar.gz SHA256SUMS | sha256sum --check   # macOS: shasum -a 256 --check
+tar -xzf tule_v0.1.0_linux_amd64.tar.gz
+```
+
+Archives are named `tule_<version>_<os>_<arch>`, for linux, darwin and
+windows on amd64 and arm64; the windows ones are zip files. Each holds the
+`tule` binary, this README and the license. Put the binary on your `PATH`.
+
+Then `tule version` prints the version you installed and the image of each
+service it runs.
 
 ## Commands
 
@@ -35,7 +55,7 @@ v2 plugin, which Docker Desktop includes and Linux installs as the
 | `tule services` | Lists the catalog: each service, the AWS service it stands in for, its image and tested version, its default ports |
 | `tule compose [service...] [-o file]` | Writes the compose file for the services named, or the configured ones, or the default set: every service but functions |
 | `tule env [--shell sh\|fish\|powershell]` | Prints the credentials, region and endpoint variables that point AWS SDKs and the AWS CLI at the running stack, or at the configured services when none runs |
-| `tule version` | Prints the version |
+| `tule version` | Prints the version, and the image and version of each service in the catalog |
 
 Every command takes `--stack <name>` (default `tule`), the compose project
 name that namespaces containers, network and volumes, and `--config

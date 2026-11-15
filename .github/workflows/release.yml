@@ -1,0 +1,108 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Install golangci-lint
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.15.0
+          install-only: true
+
+      - name: Lint, test and build
+        run: make
+
+  release:
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Fetch the annotated tag
+        # The checkout of a tag push can leave the tag without its annotation,
+        # which holds the release notes.
+        run: git fetch --force --depth=1 origin "+refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Build and archive
+        # go build stamps the module version from the tag, so the binaries
+        # report it without ldflags. The output goes under build/, which git
+        # ignores: an untracked file would stamp the version +dirty.
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$GITHUB_REF_NAME"
+          dist=build/dist
+          rm -rf build/release "$dist"
+          mkdir -p "$dist"
+          docs=()
+          for f in README.md LICENSE; do
+            if [[ -f "$f" ]]; then docs+=("$f"); fi
+          done
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+            goos="${target%/*}"
+            goarch="${target#*/}"
+            name="tule_${version}_${goos}_${goarch}"
+            dir="build/release/$name"
+            exe=tule
+            if [[ "$goos" == windows ]]; then exe=tule.exe; fi
+            mkdir -p "$dir"
+            CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
+              go build -trimpath -o "$dir/$exe" ./cmd/tule
+            cp "${docs[@]}" "$dir/"
+            if [[ "$goos" == windows ]]; then
+              (cd build/release && zip -qr "../dist/$name.zip" "$name")
+            else
+              tar -C build/release -czf "$dist/$name.tar.gz" "$name"
+            fi
+          done
+          (cd "$dist" && sha256sum -- * > SHA256SUMS)
+          cat "$dist/SHA256SUMS"
+
+      - name: Check the stamped version
+        shell: bash
+        run: |
+          set -euo pipefail
+          line="$("build/release/tule_${GITHUB_REF_NAME}_linux_amd64/tule" version | head -n 1)"
+          echo "$line"
+          if [[ "$line" != "tule ${GITHUB_REF_NAME} ("* ]]; then
+            echo "the binary reports '$line', want version ${GITHUB_REF_NAME} from a clean tree" >&2
+            exit 1
+          fi
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          if [[ "$(git cat-file -t "refs/tags/$tag")" != tag ]]; then
+            echo "$tag is not an annotated tag; its message is the release notes" >&2
+            exit 1
+          fi
+          notes="$(git for-each-ref --format='%(contents:subject)%0a%0a%(contents:body)' "refs/tags/$tag")"
+          gh release create "$tag" build/dist/* \
+            --verify-tag \
+            --title "$tag" \
+            --notes "$notes" \
+            --generate-notes
