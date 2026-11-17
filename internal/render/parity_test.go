@@ -27,6 +27,7 @@ type parityService struct {
 	Volumes     []string              `yaml:"volumes"`
 	Profiles    []string              `yaml:"profiles"`
 	GroupAdd    []string              `yaml:"group_add"`
+	SecurityOpt []string              `yaml:"security_opt"`
 }
 
 type parityProject struct {
@@ -63,6 +64,7 @@ var (
 		"depends_on",
 		"profiles",
 		"group_add",
+		"security_opt",
 	}
 	comparedDependencyKeys = []string{"condition"}
 	comparedVolumeKeys     = []string{"labels"}
@@ -353,6 +355,7 @@ func compareService(t *testing.T, name string, compose, rendered *parityService)
 	same("depends_on", compose.DependsOn, rendered.DependsOn)
 	same("profiles", compose.Profiles, rendered.Profiles)
 	same("group_add", compose.GroupAdd, rendered.GroupAdd)
+	same("security_opt", compose.SecurityOpt, rendered.SecurityOpt)
 }
 
 // TestParityReadsMergeKeys holds the decoder to compose's YAML merge keys,

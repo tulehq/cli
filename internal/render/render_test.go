@@ -257,6 +257,7 @@ func TestEveryStringIsEscaped(t *testing.T) {
 		Ports:       []string{"$V:1:1"},
 		Volumes:     []string{"$V:/data"},
 		GroupAdd:    []string{"$V"},
+		SecurityOpt: []string{"$V"},
 		Labels:      map[string]string{"L": "$V"},
 	})
 	want := Service{
@@ -265,6 +266,7 @@ func TestEveryStringIsEscaped(t *testing.T) {
 		Ports:       []string{"$$V:1:1"},
 		Volumes:     []string{"$$V:/data"},
 		GroupAdd:    []string{"$$V"},
+		SecurityOpt: []string{"$$V"},
 		Labels:      map[string]string{"L": "$$V"},
 	}
 	if !reflect.DeepEqual(s, want) {
@@ -272,7 +274,7 @@ func TestEveryStringIsEscaped(t *testing.T) {
 	}
 	// Every string field of Service is covered above: a new one fails here
 	// until it is escaped and added.
-	if n := reflect.TypeFor[Service]().NumField(); n != 7 {
+	if n := reflect.TypeFor[Service]().NumField(); n != 8 {
 		t.Errorf("Service has %d fields; escape the new one in escapeService and add it here", n)
 	}
 }

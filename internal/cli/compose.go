@@ -32,7 +32,7 @@ var errNoDockerGID = errors.New(
   Linux: --docker-gid "$(stat -c %g /var/run/docker.sock)"
   Docker Desktop (macOS, Windows): the group the socket has inside Docker Desktop's VM, not
   the one stat reports on the host, which this prints:
-    docker run --rm --entrypoint stat -v /var/run/docker.sock:/s ghcr.io/tulehq/functions:` + functionsVersion + ` -c %g /s
+    docker run --rm --entrypoint stat --security-opt label=disable -v /var/run/docker.sock:/s ghcr.io/tulehq/functions:` + functionsVersion + ` -c %g /s
   functions' README marks the Docker Desktop setup untried, and says to run the image as
   root when the socket there is owned by root with no group access, which tule does not do`,
 )

@@ -15,7 +15,7 @@ services:
       dev.tule.service: accounts
       dev.tule.stack: tule
   console:
-    image: ghcr.io/tulehq/console:0.3.11
+    image: ghcr.io/tulehq/console:0.3.12
     depends_on:
       accounts:
         condition: service_healthy
