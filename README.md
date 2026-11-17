@@ -218,11 +218,14 @@ finds on the Docker daemon itself, with a throwaway container from the
 functions image (pulled for the stack anyway), without a network:
 
 ```sh
-docker run --rm --network none --entrypoint stat -v /var/run/docker.sock:/s ghcr.io/tulehq/functions:0.7.0 -c %g /s
+docker run --rm --network none --entrypoint stat --security-opt label=disable -v /var/run/docker.sock:/s ghcr.io/tulehq/functions:0.7.0 -c %g /s
 ```
 
 It runs only once the plan is printed and `up` has checked for downgrades
-and busy host ports, so a refused `up` runs no container.
+and busy host ports, so a refused `up` runs no container. The probe and
+functions run with SELinux labeling off (`label=disable`): on an SELinux
+host such as Fedora or RHEL, the socket's label keeps a container from
+opening it otherwise. Hosts without SELinux ignore the option.
 
 The mount is made by the daemon, so the group is the socket's on the
 daemon's host: the Linux host, the VM inside Docker Desktop (whose group
