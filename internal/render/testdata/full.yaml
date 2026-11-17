@@ -15,7 +15,7 @@ services:
       dev.tule.service: accounts
       dev.tule.stack: tule
   console:
-    image: ghcr.io/tulehq/console:0.3.12
+    image: ghcr.io/tulehq/console:0.3.13
     depends_on:
       accounts:
         condition: service_healthy
@@ -114,7 +114,7 @@ services:
       dev.tule.service: object-store
       dev.tule.stack: tule
   queues:
-    image: ghcr.io/tulehq/queues:0.6.1
+    image: ghcr.io/tulehq/queues:0.7.0
     environment:
       TULE_Auth_AccessKeyID: AKIAIOSFODNN7EXAMPLE
       TULE_Auth_IdentityEndpoint: http://identity:9030
