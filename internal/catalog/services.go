@@ -144,7 +144,7 @@ var services = []*Service{
 	{
 		Name:    Console,
 		Image:   Registry + "/console",
-		Version: "0.3.11",
+		Version: "0.3.12",
 		Ports:   []Port{{Name: PortAPI, Default: consolePort}},
 		DependsOn: []string{
 			Identity, Accounts, ObjectStore, SecretStore, Mailbox, Queues,

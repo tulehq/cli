@@ -254,7 +254,7 @@ func TestComposeFunctionsNeedsTheGroup(t *testing.T) {
 	}
 	for _, want := range []string{
 		"--docker-gid", "stat -c %g /var/run/docker.sock", "Docker Desktop",
-		"docker run --rm --entrypoint stat -v /var/run/docker.sock:/s ghcr.io/tulehq/functions:" +
+		"docker run --rm --entrypoint stat --security-opt label=disable -v /var/run/docker.sock:/s ghcr.io/tulehq/functions:" +
 			functionsVersion + " -c %g /s",
 	} {
 		if !strings.Contains(err.Error(), want) {

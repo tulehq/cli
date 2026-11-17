@@ -118,6 +118,9 @@ func (p *Plan) compare(
 	if groupChanged(have.GroupAdd, unescapeAll(want.GroupAdd)) {
 		reasons = append(reasons, "Docker socket group changed")
 	}
+	if !slices.Equal(have.SecurityOpt, unescapeAll(want.SecurityOpt)) {
+		reasons = append(reasons, "security options changed")
+	}
 	if len(reasons) > 0 {
 		p.Recreate = append(p.Recreate, Change{Service: name, Reasons: reasons})
 	}

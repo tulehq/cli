@@ -48,6 +48,7 @@ type Service struct {
 	Ports       []string              `yaml:"ports,omitempty"`
 	Volumes     []string              `yaml:"volumes,omitempty"`
 	GroupAdd    []string              `yaml:"group_add,omitempty"`
+	SecurityOpt []string              `yaml:"security_opt,omitempty"`
 	Labels      map[string]string     `yaml:"labels"`
 }
 
@@ -171,9 +172,15 @@ func renderService(in Input, svc *catalog.Service, wiring catalog.Wiring) (Servi
 		}
 		s.Volumes = append(s.Volumes, in.Docker.SocketPath+":/var/run/docker.sock")
 		s.GroupAdd = []string{in.Docker.GroupID}
+		s.SecurityOpt = []string{LabelDisable}
 	}
 	return escapeService(s), nil
 }
+
+// LabelDisable turns SELinux labeling off for a container. On an SELinux
+// host the Docker socket's label keeps a container from opening it; hosts
+// without SELinux ignore the option.
+const LabelDisable = "label=disable"
 
 // groupID is a numeric group ID.
 var groupID = regexp.MustCompile(`^[0-9]+$`)
@@ -196,6 +203,7 @@ func escapeService(s Service) Service {
 	s.Ports = escapeList(s.Ports)
 	s.Volumes = escapeList(s.Volumes)
 	s.GroupAdd = escapeList(s.GroupAdd)
+	s.SecurityOpt = escapeList(s.SecurityOpt)
 	return s
 }
 

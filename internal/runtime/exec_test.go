@@ -225,7 +225,8 @@ func TestSocketGroup(t *testing.T) {
 	if gid != "989" {
 		t.Errorf("SocketGroup() = %q, want 989", gid)
 	}
-	want := "run --rm --network none --entrypoint stat --volume /var/run/docker.sock:/s " +
+	want := "run --rm --network none --entrypoint stat --security-opt label=disable " +
+		"--volume /var/run/docker.sock:/s " +
 		"ghcr.io/tulehq/functions:0.7.0 -c %g /s\n"
 	if got := readLog(t, log); got != want {
 		t.Errorf("docker ran with\n%q\nwant\n%q", got, want)

@@ -44,6 +44,9 @@ func Containers(p *render.Project) []runtime.Container {
 		for _, g := range svc.GroupAdd {
 			c.GroupAdd = append(c.GroupAdd, unescape(g))
 		}
+		for _, o := range svc.SecurityOpt {
+			c.SecurityOpt = append(c.SecurityOpt, unescape(o))
+		}
 		for _, spec := range svc.Ports {
 			c.Ports = append(c.Ports, port(spec))
 		}

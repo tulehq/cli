@@ -314,7 +314,8 @@ func (c *Compose) PS(ctx context.Context, stack string) ([]Container, error) {
 // containerJSON is the part of `docker container inspect` PS reads.
 type containerJSON struct {
 	HostConfig struct {
-		GroupAdd []string `json:"GroupAdd"`
+		GroupAdd    []string `json:"GroupAdd"`
+		SecurityOpt []string `json:"SecurityOpt"`
 	} `json:"HostConfig"`
 	Config struct {
 		Labels map[string]string `json:"Labels"`
@@ -354,13 +355,14 @@ func parseContainers(data []byte) ([]Container, []string, error) {
 	images := make([]string, 0, len(raw))
 	for _, r := range raw {
 		ct := Container{
-			ID:       r.ID,
-			Name:     strings.TrimPrefix(r.Name, "/"),
-			Image:    r.Config.Image,
-			Labels:   r.Config.Labels,
-			Env:      envMap(r.Config.Env),
-			State:    r.State.Status,
-			GroupAdd: r.HostConfig.GroupAdd,
+			ID:          r.ID,
+			Name:        strings.TrimPrefix(r.Name, "/"),
+			Image:       r.Config.Image,
+			Labels:      r.Config.Labels,
+			Env:         envMap(r.Config.Env),
+			State:       r.State.Status,
+			GroupAdd:    r.HostConfig.GroupAdd,
+			SecurityOpt: r.HostConfig.SecurityOpt,
 		}
 		if r.State.Health != nil {
 			ct.Health = r.State.Health.Status
@@ -514,6 +516,7 @@ func (c *Compose) RemoveFunctionContainers(ctx context.Context, stack string) (i
 // on the daemon's host: inside Docker Desktop's VM, or on a remote host.
 func (c *Compose) SocketGroup(ctx context.Context, image, socketPath string) (string, error) {
 	out, err := c.output(ctx, "run", "--rm", "--network", "none", "--entrypoint", "stat",
+		"--security-opt", render.LabelDisable,
 		"--volume", socketPath+":/s", image, "-c", "%g", "/s")
 	if err != nil {
 		return "", fmt.Errorf("find the Docker socket's group: %w", err)

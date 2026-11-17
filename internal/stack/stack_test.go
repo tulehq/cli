@@ -483,3 +483,38 @@ func TestPlanComparesTheSocketGroupOnlyWhenKnown(t *testing.T) {
 		t.Errorf("an unknown group: plan = %+v, want no change listed", plan)
 	}
 }
+
+func TestPlanComparesSecurityOptions(t *testing.T) {
+	cfg := parse(t, "")
+	sel := selection(t, catalog.Functions, catalog.Queues)
+	p, err := render.Render(render.Input{
+		Stack: "tule", Config: cfg, Selection: sel,
+		Docker: render.Docker{SocketPath: "/var/run/docker.sock", GroupID: "989"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := bindings(t, cfg, catalog.Functions, catalog.Queues)
+	containers := stacktest.Containers(p)
+	st := func() *stack.State {
+		s, err := stack.FromContainers("tule", containers, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	if plan := stack.NewPlan(st(), p, b); len(plan.Recreate) != 0 {
+		t.Errorf("the same options: plan = %+v, want no change listed", plan)
+	}
+	for i := range containers {
+		containers[i].SecurityOpt = nil // A functions container made before label=disable.
+	}
+	plan := stack.NewPlan(st(), p, b)
+	if len(plan.Recreate) != 1 || plan.Recreate[0].Service != catalog.Functions ||
+		!slices.Equal(plan.Recreate[0].Reasons, []string{"security options changed"}) {
+		t.Errorf(
+			"functions without label=disable: plan = %+v, want functions alone recreated",
+			plan,
+		)
+	}
+}

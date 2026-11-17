@@ -100,6 +100,9 @@ type Container struct {
 	Mounts []Mount
 	// GroupAdd are the supplementary groups the container runs with.
 	GroupAdd []string
+	// SecurityOpt are the container's security options, such as
+	// label=disable.
+	SecurityOpt []string
 }
 
 // Port is one published port.
