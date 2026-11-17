@@ -107,7 +107,7 @@ var services = []*Service{
 		Name:         Queues,
 		AWS:          "SQS",
 		Image:        Registry + "/queues",
-		Version:      "0.6.1",
+		Version:      "0.7.0",
 		Ports:        []Port{{Name: PortAPI, Default: queuesPort}},
 		Volume:       "queuesdata",
 		EndpointVars: []string{"SQS"},
@@ -144,7 +144,7 @@ var services = []*Service{
 	{
 		Name:    Console,
 		Image:   Registry + "/console",
-		Version: "0.3.12",
+		Version: "0.3.13",
 		Ports:   []Port{{Name: PortAPI, Default: consolePort}},
 		DependsOn: []string{
 			Identity, Accounts, ObjectStore, SecretStore, Mailbox, Queues,
